@@ -1,4 +1,4 @@
-# Gerber Viewer Pro
+<img width="1545" height="963" alt="screenshot" src="https://github.com/user-attachments/assets/9005df73-77f0-494c-9ad0-5f9a4b88e0d5" /># Gerber Viewer Pro
 
 Un visualizzatore di file Gerber e Excellon moderno, leggero e completamente client-side. Nessun server richiesto, funziona direttamente nel browser.
 
@@ -19,7 +19,7 @@ Un visualizzatore di file Gerber e Excellon moderno, leggero e completamente cli
 
 ## 🚀 Demo
 
-Apri `index.html` nel tuo browser oppure visita: [GitHub Pages Demo](https://tuousername.github.io/gerber-viewer/)
+Apri `index.html` nel tuo browser oppure visita: [GitHub Pages Demo](https://quakef4.github.io/gerber-viewer/)
 
 ## 📁 Formati Supportati
 
