@@ -402,7 +402,7 @@ class GerberViewer {
 
             this.controls3D.targetRotation.y += deltaX * this.controls3D.rotationSpeed;
             this.controls3D.targetRotation.x += deltaY * this.controls3D.rotationSpeed;
-            this.controls3D.targetRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.controls3D.targetRotation.x));
+            // Allow full 360° rotation
 
             this.controls3D.previousMousePosition = { x: e.clientX, y: e.clientY };
             this.render3D();
@@ -518,26 +518,36 @@ class GerberViewer {
         const viewBtn = document.querySelector('.view-btn[data-view].active');
         const currentView = viewBtn ? viewBtn.dataset.view : 'top';
 
-        // Build layers
+        // Build copper layers first
         for (const layer of sorted) {
             if (!layer.visible) continue;
-            if (this.copperOnly && layer.type !== 'copper' && layer.type !== 'drill') continue;
+            if (layer.type !== 'copper') continue;
 
             const isTop = layer.side === 'top' || layer.side === 'both';
-            const isBottom = layer.side === 'bottom' || layer.side === 'both';
+            const zPos = isTop ? pcbThickness/2 + copperThickness/2 : -pcbThickness/2 - copperThickness/2;
+            this.buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop);
+        }
 
-            // Z positions
-            let zPos = 0;
-            if (layer.type === 'copper') {
-                zPos = isTop ? pcbThickness/2 + copperThickness/2 : -pcbThickness/2 - copperThickness/2;
-            } else if (layer.type === 'mask') {
-                zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness/2 : -pcbThickness/2 - copperThickness - maskThickness/2;
-            } else if (layer.type === 'silk') {
-                zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness + silkThickness/2 : -pcbThickness/2 - copperThickness - maskThickness - silkThickness/2;
+        // Build solder mask as solid surface (only if not copperOnly mode)
+        if (!this.copperOnly) {
+            for (const layer of sorted) {
+                if (!layer.visible) continue;
+                if (layer.type !== 'mask') continue;
+
+                const isTop = layer.side === 'top';
+                const zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness/2 : -pcbThickness/2 - copperThickness - maskThickness/2;
+                this.buildSolderMask3D(layer, boardShape, centerX, centerY, scale, zPos, maskThickness);
             }
 
-            // Build layer geometry
-            this.buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop);
+            // Build silkscreen layers
+            for (const layer of sorted) {
+                if (!layer.visible) continue;
+                if (layer.type !== 'silk') continue;
+
+                const isTop = layer.side === 'top' || layer.side === 'both';
+                const zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness + silkThickness/2 : -pcbThickness/2 - copperThickness - maskThickness - silkThickness/2;
+                this.buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop);
+            }
         }
 
         // Add drill holes
@@ -597,6 +607,29 @@ class GerberViewer {
             } else if (cmd.type === 'region' && cmd.points && cmd.points.length >= 3) {
                 this.addRegion3D(cmd, centerX, centerY, scale, zPos, thickness, material);
             }
+        }
+    }
+
+    buildSolderMask3D(layer, boardShape, centerX, centerY, scale, zPos, thickness) {
+        // Create solder mask as a solid surface covering the board
+        const maskMaterial = new THREE.MeshPhongMaterial({
+            color: new THREE.Color(layer.color),
+            shininess: 30,
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide
+        });
+
+        try {
+            const maskGeom = new THREE.ExtrudeGeometry(boardShape, {
+                depth: thickness,
+                bevelEnabled: false
+            });
+            const maskMesh = new THREE.Mesh(maskGeom, maskMaterial);
+            maskMesh.position.z = zPos - thickness / 2;
+            this.pcbGroup.add(maskMesh);
+        } catch(e) {
+            // Fallback if board shape fails
         }
     }
 
@@ -732,15 +765,15 @@ class GerberViewer {
                 const y = (cmd.y - centerY) * scale;
                 const radius = (cmd.diameter / 2) * scale;
 
-                // Hole
-                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.2, 24);
+                // Hole - increased segments for smoother circles
+                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.2, 32);
                 holeGeom.rotateX(Math.PI / 2);
                 const holeMesh = new THREE.Mesh(holeGeom, holeMaterial.clone());
                 holeMesh.position.set(x, y, 0);
                 this.pcbGroup.add(holeMesh);
 
-                // Copper ring
-                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 8, 24);
+                // Copper ring - increased segments for smoother appearance
+                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 16, 32);
                 const ringTop = new THREE.Mesh(ringGeom, ringMaterial.clone());
                 ringTop.position.set(x, y, pcbThickness / 2 + 0.02);
                 this.pcbGroup.add(ringTop);
@@ -749,7 +782,7 @@ class GerberViewer {
                 ringBottom.position.set(x, y, -pcbThickness / 2 - 0.02);
                 this.pcbGroup.add(ringBottom);
             } else if (cmd.type === 'slot') {
-                // Simplified slot rendering
+                // Slot rendering with rounded ends
                 const x1 = (cmd.x1 - centerX) * scale;
                 const y1 = (cmd.y1 - centerY) * scale;
                 const x2 = (cmd.x2 - centerX) * scale;
@@ -758,12 +791,22 @@ class GerberViewer {
                 const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
                 const angle = Math.atan2(y2 - y1, x2 - x1);
 
-                // Slot as elongated hole
-                const slotGeom = new THREE.BoxGeometry(length + radius * 2, radius * 2, pcbThickness + 0.2);
+                // Slot body
+                const slotGeom = new THREE.BoxGeometry(length, radius * 2, pcbThickness + 0.2);
                 const slotMesh = new THREE.Mesh(slotGeom, holeMaterial.clone());
                 slotMesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, 0);
                 slotMesh.rotation.z = angle;
                 this.pcbGroup.add(slotMesh);
+
+                // Rounded ends
+                const endGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.2, 32);
+                endGeom.rotateX(Math.PI / 2);
+                const end1 = new THREE.Mesh(endGeom, holeMaterial.clone());
+                end1.position.set(x1, y1, 0);
+                this.pcbGroup.add(end1);
+                const end2 = new THREE.Mesh(endGeom.clone(), holeMaterial.clone());
+                end2.position.set(x2, y2, 0);
+                this.pcbGroup.add(end2);
             }
         }
     }
