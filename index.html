@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerber Viewer Pro v22</title>
+    <title>Gerber Viewer Pro v23 - 2D/3D</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         :root { --bg:#0c0c0c; --panel:#141414; --surface:#1e1e1e; --border:#2a2a2a; --text:#e0e0e0; --text2:#666; --accent:#22c55e; }
         * { margin:0; padding:0; box-sizing:border-box; }
@@ -84,6 +85,12 @@
         .zoom-display { font-size:12px; color:var(--text); min-width:55px; text-align:center; }
         .canvas-container { flex:1; position:relative; overflow:hidden; }
         #canvas2d { position:absolute; top:0; left:0; width:100%; height:100%; cursor:grab; }
+        #canvas3d { position:absolute; top:0; left:0; width:100%; height:100%; cursor:grab; display:none; }
+        .view-mode-section { margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border); }
+        .view-mode-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+        .view-mode-btn { padding:12px 8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:12px; cursor:pointer; transition:all .15s; display:flex; align-items:center; justify-content:center; gap:6px; }
+        .view-mode-btn:hover { border-color:var(--text); color:var(--text); }
+        .view-mode-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
         .empty-state { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text2); }
         .empty-icon { font-size:72px; margin-bottom:20px; opacity:.2; }
         .empty-title { font-size:20px; margin-bottom:8px; color:var(--text); }
@@ -96,7 +103,7 @@
 <body>
 <div class="app">
     <header>
-        <div class="logo"><div class="logo-icon">◫</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v22</small></div>
+        <div class="logo"><div class="logo-icon">◫</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v23</small></div>
         <div class="header-actions">
             <button class="btn" id="btnClear">🗑️ Pulisci</button>
             <button class="btn" id="btnExport">📷 Esporta</button>
@@ -131,6 +138,13 @@
         <div class="panel">
             <div class="panel-header">👁 Vista</div>
             <div class="panel-body">
+                <div class="view-mode-section">
+                    <div class="view-label">Modalità</div>
+                    <div class="view-mode-grid">
+                        <button class="view-mode-btn active" data-mode="2d">📐 2D</button>
+                        <button class="view-mode-btn" data-mode="3d">📦 3D</button>
+                    </div>
+                </div>
                 <div class="view-section">
                     <div class="view-label">Lato</div>
                     <div class="view-grid">
@@ -142,7 +156,7 @@
                 <div class="view-section">
                     <div class="view-label">Rotazione</div>
                     <div class="view-grid">
-                        <button class="view-btn" data-rot="0">0°</button>
+                        <button class="view-btn active" data-rot="0">0°</button>
                         <button class="view-btn" data-rot="90">90°</button>
                         <button class="view-btn" data-rot="180">180°</button>
                     </div>
@@ -194,6 +208,7 @@
         </div>
         <div class="canvas-container" id="canvasContainer">
             <canvas id="canvas2d" style="display:none"></canvas>
+            <canvas id="canvas3d"></canvas>
             <div class="empty-state" id="emptyState">
                 <div class="empty-icon">◫</div>
                 <div class="empty-title">Carica file Gerber</div>
@@ -209,6 +224,7 @@ class GerberViewer {
     constructor() {
         this.canvas2d = document.getElementById('canvas2d');
         this.ctx = this.canvas2d.getContext('2d');
+        this.canvas3d = document.getElementById('canvas3d');
         this.files = [];
         this.layers = [];
         this.bounds = null;
@@ -221,8 +237,18 @@ class GerberViewer {
         this.flipV = false;
         this.colors = { bg:'#0c0c0c', mask:'#14532d', silk:'#f5f5f4', copper:'#b45309' };
         this.copperOnly = false;
-        
+        this.viewMode = '2d';
+
+        // Three.js components
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.controls = null;
+        this.pcbGroup = null;
+        this.animationId = null;
+
         this.setupEvents();
+        this.init3D();
     }
     
     setupEvents() {
@@ -242,15 +268,24 @@ class GerberViewer {
         document.getElementById('btnZoomIn').onclick = () => this.setZoom(this.zoom*1.3);
         document.getElementById('btnZoomOut').onclick = () => this.setZoom(this.zoom/1.3);
         document.getElementById('btnFit').onclick = () => this.fit();
-        document.getElementById('btnFlipH').onclick = () => { this.flipH=!this.flipH; this.render(); };
-        document.getElementById('btnFlipV').onclick = () => { this.flipV=!this.flipV; this.render(); };
-        
+        document.getElementById('btnFlipH').onclick = () => {
+            this.flipH = !this.flipH;
+            this.render();
+            if (this.viewMode === '3d') this.render3D();
+        };
+        document.getElementById('btnFlipV').onclick = () => {
+            this.flipV = !this.flipV;
+            this.render();
+            if (this.viewMode === '3d') this.render3D();
+        };
+
         document.getElementById('btnCopperOnly').onclick = () => {
             this.copperOnly = !this.copperOnly;
             document.getElementById('btnCopperOnly').classList.toggle('active', this.copperOnly);
             this.render();
+            if (this.viewMode === '3d') this.build3DModel();
         };
-        
+
         document.querySelectorAll('.view-btn[data-view]').forEach(btn => {
             btn.onclick = () => {
                 document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
@@ -258,13 +293,14 @@ class GerberViewer {
                 this.setView(btn.dataset.view);
             };
         });
-        
+
         document.querySelectorAll('.view-btn[data-rot]').forEach(btn => {
             btn.onclick = () => {
                 document.querySelectorAll('.view-btn[data-rot]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.rotation = parseInt(btn.dataset.rot);
                 this.render();
+                if (this.viewMode === '3d') this.render3D();
             };
         });
         
@@ -280,6 +316,16 @@ class GerberViewer {
                 });
                 this.updateLayerList();
                 this.render();
+                if (this.viewMode === '3d') this.build3DModel();
+            };
+        });
+
+        // View mode toggle (2D/3D)
+        document.querySelectorAll('.view-mode-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.view-mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.setViewMode(btn.dataset.mode);
             };
         });
         
@@ -294,9 +340,454 @@ class GerberViewer {
             this.lastMouse = {x:e.clientX, y:e.clientY};
         };
         container.onmouseup = container.onmouseleave = () => { this.drag = false; this.canvas2d.style.cursor = 'grab'; };
-        window.onresize = () => { if (this.layers.length) this.fit(); };
+        window.onresize = () => {
+            if (this.layers.length) {
+                this.fit();
+                if (this.viewMode === '3d') this.resize3D();
+            }
+        };
     }
-    
+
+    init3D() {
+        const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+
+        // Scene
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(this.colors.bg);
+
+        // Camera
+        this.camera = new THREE.PerspectiveCamera(45, rect.width / rect.height, 0.1, 10000);
+        this.camera.position.set(0, 0, 100);
+
+        // Renderer
+        this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas3d, antialias: true });
+        this.renderer.setSize(rect.width, rect.height);
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        this.scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(50, 50, 100);
+        this.scene.add(directionalLight);
+
+        const backLight = new THREE.DirectionalLight(0xffffff, 0.3);
+        backLight.position.set(-50, -50, -100);
+        this.scene.add(backLight);
+
+        // PCB Group
+        this.pcbGroup = new THREE.Group();
+        this.scene.add(this.pcbGroup);
+
+        // Simple orbit controls (manual implementation)
+        this.controls3D = {
+            isDragging: false,
+            previousMousePosition: { x: 0, y: 0 },
+            rotationSpeed: 0.005,
+            zoomSpeed: 0.1,
+            targetRotation: { x: -Math.PI / 6, y: 0 }
+        };
+
+        this.canvas3d.addEventListener('mousedown', (e) => {
+            if (this.viewMode !== '3d') return;
+            this.controls3D.isDragging = true;
+            this.controls3D.previousMousePosition = { x: e.clientX, y: e.clientY };
+        });
+
+        this.canvas3d.addEventListener('mousemove', (e) => {
+            if (this.viewMode !== '3d' || !this.controls3D.isDragging) return;
+            const deltaX = e.clientX - this.controls3D.previousMousePosition.x;
+            const deltaY = e.clientY - this.controls3D.previousMousePosition.y;
+
+            this.controls3D.targetRotation.y += deltaX * this.controls3D.rotationSpeed;
+            this.controls3D.targetRotation.x += deltaY * this.controls3D.rotationSpeed;
+            this.controls3D.targetRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.controls3D.targetRotation.x));
+
+            this.controls3D.previousMousePosition = { x: e.clientX, y: e.clientY };
+            this.render3D();
+        });
+
+        this.canvas3d.addEventListener('mouseup', () => {
+            this.controls3D.isDragging = false;
+        });
+
+        this.canvas3d.addEventListener('mouseleave', () => {
+            this.controls3D.isDragging = false;
+        });
+
+        this.canvas3d.addEventListener('wheel', (e) => {
+            if (this.viewMode !== '3d') return;
+            e.preventDefault();
+            const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
+            this.camera.position.z = Math.max(10, Math.min(500, this.camera.position.z * zoomFactor));
+            this.render3D();
+        });
+    }
+
+    resize3D() {
+        const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+        this.camera.aspect = rect.width / rect.height;
+        this.camera.updateProjectionMatrix();
+        this.renderer.setSize(rect.width, rect.height);
+        this.render3D();
+    }
+
+    setViewMode(mode) {
+        this.viewMode = mode;
+        if (mode === '2d') {
+            this.canvas2d.style.display = this.layers.length ? 'block' : 'none';
+            this.canvas3d.style.display = 'none';
+            this.render();
+        } else {
+            this.canvas2d.style.display = 'none';
+            this.canvas3d.style.display = this.layers.length ? 'block' : 'none';
+            if (this.layers.length) {
+                this.resize3D();
+                this.build3DModel();
+            }
+        }
+    }
+
+    build3DModel() {
+        if (!this.bounds || !this.layers.length) return;
+
+        // Clear existing model
+        while (this.pcbGroup.children.length > 0) {
+            const child = this.pcbGroup.children[0];
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(m => m.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+            this.pcbGroup.remove(child);
+        }
+
+        const bw = this.bounds.maxX - this.bounds.minX;
+        const bh = this.bounds.maxY - this.bounds.minY;
+        const centerX = (this.bounds.minX + this.bounds.maxX) / 2;
+        const centerY = (this.bounds.minY + this.bounds.maxY) / 2;
+        const scale = 1;
+
+        // PCB thickness in mm
+        const pcbThickness = 1.6;
+        const copperThickness = 0.035;
+        const maskThickness = 0.02;
+        const silkThickness = 0.01;
+
+        // Board outline shape
+        let boardShape;
+        if (this.boardOutline && this.boardOutline.length >= 3) {
+            boardShape = new THREE.Shape();
+            boardShape.moveTo((this.boardOutline[0].x - centerX) * scale, (this.boardOutline[0].y - centerY) * scale);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                boardShape.lineTo((this.boardOutline[i].x - centerX) * scale, (this.boardOutline[i].y - centerY) * scale);
+            }
+            boardShape.closePath();
+        } else {
+            // Fallback to rectangular board
+            boardShape = new THREE.Shape();
+            boardShape.moveTo(-bw/2 * scale, -bh/2 * scale);
+            boardShape.lineTo(bw/2 * scale, -bh/2 * scale);
+            boardShape.lineTo(bw/2 * scale, bh/2 * scale);
+            boardShape.lineTo(-bw/2 * scale, bh/2 * scale);
+            boardShape.closePath();
+        }
+
+        // FR4 substrate (board base)
+        const fr4Material = new THREE.MeshPhongMaterial({
+            color: 0xc19a6b,
+            shininess: 10,
+            side: THREE.DoubleSide
+        });
+        const boardGeom = new THREE.ExtrudeGeometry(boardShape, {
+            depth: pcbThickness,
+            bevelEnabled: false
+        });
+        const boardMesh = new THREE.Mesh(boardGeom, fr4Material);
+        boardMesh.position.z = -pcbThickness / 2;
+        this.pcbGroup.add(boardMesh);
+
+        // Sorted layers
+        const sorted = [...this.layers].sort((a, b) => a.order - b.order);
+
+        // Get current view filter
+        const viewBtn = document.querySelector('.view-btn[data-view].active');
+        const currentView = viewBtn ? viewBtn.dataset.view : 'top';
+
+        // Build layers
+        for (const layer of sorted) {
+            if (!layer.visible) continue;
+            if (this.copperOnly && layer.type !== 'copper' && layer.type !== 'drill') continue;
+
+            const isTop = layer.side === 'top' || layer.side === 'both';
+            const isBottom = layer.side === 'bottom' || layer.side === 'both';
+
+            // Z positions
+            let zPos = 0;
+            if (layer.type === 'copper') {
+                zPos = isTop ? pcbThickness/2 + copperThickness/2 : -pcbThickness/2 - copperThickness/2;
+            } else if (layer.type === 'mask') {
+                zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness/2 : -pcbThickness/2 - copperThickness - maskThickness/2;
+            } else if (layer.type === 'silk') {
+                zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness + silkThickness/2 : -pcbThickness/2 - copperThickness - maskThickness - silkThickness/2;
+            }
+
+            // Build layer geometry
+            this.buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop);
+        }
+
+        // Add drill holes
+        for (const layer of sorted) {
+            if (layer.type === 'drill' && layer.visible) {
+                this.buildDrillHoles(layer, centerX, centerY, scale, pcbThickness);
+            }
+        }
+
+        // Apply rotation and flip
+        this.pcbGroup.rotation.x = this.controls3D.targetRotation.x;
+        this.pcbGroup.rotation.y = this.controls3D.targetRotation.y;
+
+        // Apply view rotation
+        if (this.rotation === 90) {
+            this.pcbGroup.rotation.z = Math.PI / 2;
+        } else if (this.rotation === 180) {
+            this.pcbGroup.rotation.z = Math.PI;
+        } else {
+            this.pcbGroup.rotation.z = 0;
+        }
+
+        // Apply flip
+        this.pcbGroup.scale.x = this.flipH ? -1 : 1;
+        this.pcbGroup.scale.y = this.flipV ? -1 : 1;
+
+        // Fit camera
+        const maxDim = Math.max(bw, bh);
+        this.camera.position.z = maxDim * 2;
+
+        this.render3D();
+    }
+
+    buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop) {
+        const color = new THREE.Color(layer.color);
+        const thickness = layer.type === 'copper' ? 0.035 : (layer.type === 'mask' ? 0.02 : 0.01);
+
+        // Create material
+        const material = new THREE.MeshPhongMaterial({
+            color: color,
+            shininess: layer.type === 'copper' ? 80 : 30,
+            transparent: layer.type === 'mask',
+            opacity: layer.type === 'mask' ? 0.85 : 1,
+            side: THREE.DoubleSide
+        });
+
+        // Process commands
+        for (const cmd of layer.cmds) {
+            if (cmd.polarity === 'clear') continue;
+
+            if (cmd.type === 'flash') {
+                this.addFlash3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            } else if (cmd.type === 'line') {
+                this.addLine3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            } else if (cmd.type === 'arc') {
+                this.addArc3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            } else if (cmd.type === 'region' && cmd.points && cmd.points.length >= 3) {
+                this.addRegion3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            }
+        }
+    }
+
+    addFlash3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
+        const x = (cmd.x - centerX) * scale;
+        const y = (cmd.y - centerY) * scale;
+        const ap = cmd.aperture;
+        let geometry;
+
+        if (ap.type === 'C') {
+            const radius = (ap.params[0] || 0.5) / 2 * scale;
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 32);
+            geometry.rotateX(Math.PI / 2);
+        } else if (ap.type === 'R') {
+            const w = (ap.params[0] || 0.5) * scale;
+            const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
+            geometry = new THREE.BoxGeometry(w, h, thickness);
+        } else if (ap.type === 'O') {
+            // Obround - use capsule shape
+            const w = (ap.params[0] || 0.5) * scale;
+            const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
+            if (Math.abs(w - h) < 0.001) {
+                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 32);
+                geometry.rotateX(Math.PI / 2);
+            } else {
+                // Simplified obround as rounded box
+                geometry = new THREE.BoxGeometry(w, h, thickness);
+            }
+        } else {
+            // Fallback to circle
+            const radius = (ap.params[0] || 0.5) / 2 * scale;
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 32);
+            geometry.rotateX(Math.PI / 2);
+        }
+
+        const mesh = new THREE.Mesh(geometry, material.clone());
+        mesh.position.set(x, y, zPos);
+        if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+        this.pcbGroup.add(mesh);
+    }
+
+    addLine3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
+        const x1 = (cmd.x1 - centerX) * scale;
+        const y1 = (cmd.y1 - centerY) * scale;
+        const x2 = (cmd.x2 - centerX) * scale;
+        const y2 = (cmd.y2 - centerY) * scale;
+        const width = (cmd.width || 0.1) * scale;
+
+        const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
+        if (length < 0.001) return;
+
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+
+        // Create line as box
+        const geometry = new THREE.BoxGeometry(length, width, thickness);
+        const mesh = new THREE.Mesh(geometry, material.clone());
+        mesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, zPos);
+        mesh.rotation.z = angle;
+        this.pcbGroup.add(mesh);
+
+        // Add round caps
+        const capGeom = new THREE.CylinderGeometry(width/2, width/2, thickness, 16);
+        capGeom.rotateX(Math.PI / 2);
+
+        const cap1 = new THREE.Mesh(capGeom, material.clone());
+        cap1.position.set(x1, y1, zPos);
+        this.pcbGroup.add(cap1);
+
+        const cap2 = new THREE.Mesh(capGeom.clone(), material.clone());
+        cap2.position.set(x2, y2, zPos);
+        this.pcbGroup.add(cap2);
+    }
+
+    addArc3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
+        const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+        let prevX = (cmd.x1 - centerX) * scale;
+        let prevY = (cmd.y1 - centerY) * scale;
+        const width = (cmd.width || 0.1) * scale;
+
+        for (const pt of pts) {
+            const x = (pt.x - centerX) * scale;
+            const y = (pt.y - centerY) * scale;
+            const length = Math.sqrt((x-prevX)**2 + (y-prevY)**2);
+
+            if (length >= 0.001) {
+                const angle = Math.atan2(y - prevY, x - prevX);
+                const geometry = new THREE.BoxGeometry(length, width, thickness);
+                const mesh = new THREE.Mesh(geometry, material.clone());
+                mesh.position.set((prevX + x) / 2, (prevY + y) / 2, zPos);
+                mesh.rotation.z = angle;
+                this.pcbGroup.add(mesh);
+            }
+            prevX = x;
+            prevY = y;
+        }
+    }
+
+    addRegion3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
+        const shape = new THREE.Shape();
+        shape.moveTo((cmd.points[0].x - centerX) * scale, (cmd.points[0].y - centerY) * scale);
+        for (let i = 1; i < cmd.points.length; i++) {
+            shape.lineTo((cmd.points[i].x - centerX) * scale, (cmd.points[i].y - centerY) * scale);
+        }
+        shape.closePath();
+
+        try {
+            const geometry = new THREE.ExtrudeGeometry(shape, {
+                depth: thickness,
+                bevelEnabled: false
+            });
+            const mesh = new THREE.Mesh(geometry, material.clone());
+            mesh.position.z = zPos - thickness / 2;
+            this.pcbGroup.add(mesh);
+        } catch(e) {
+            // Skip invalid shapes
+        }
+    }
+
+    buildDrillHoles(layer, centerX, centerY, scale, pcbThickness) {
+        const holeMaterial = new THREE.MeshPhongMaterial({
+            color: 0x0c0c0c,
+            shininess: 5
+        });
+
+        const ringMaterial = new THREE.MeshPhongMaterial({
+            color: new THREE.Color(this.colors.copper),
+            shininess: 80
+        });
+
+        for (const cmd of layer.cmds) {
+            if (cmd.type === 'drill') {
+                const x = (cmd.x - centerX) * scale;
+                const y = (cmd.y - centerY) * scale;
+                const radius = (cmd.diameter / 2) * scale;
+
+                // Hole
+                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.2, 24);
+                holeGeom.rotateX(Math.PI / 2);
+                const holeMesh = new THREE.Mesh(holeGeom, holeMaterial.clone());
+                holeMesh.position.set(x, y, 0);
+                this.pcbGroup.add(holeMesh);
+
+                // Copper ring
+                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 8, 24);
+                const ringTop = new THREE.Mesh(ringGeom, ringMaterial.clone());
+                ringTop.position.set(x, y, pcbThickness / 2 + 0.02);
+                this.pcbGroup.add(ringTop);
+
+                const ringBottom = new THREE.Mesh(ringGeom.clone(), ringMaterial.clone());
+                ringBottom.position.set(x, y, -pcbThickness / 2 - 0.02);
+                this.pcbGroup.add(ringBottom);
+            } else if (cmd.type === 'slot') {
+                // Simplified slot rendering
+                const x1 = (cmd.x1 - centerX) * scale;
+                const y1 = (cmd.y1 - centerY) * scale;
+                const x2 = (cmd.x2 - centerX) * scale;
+                const y2 = (cmd.y2 - centerY) * scale;
+                const radius = (cmd.diameter / 2) * scale;
+                const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
+                const angle = Math.atan2(y2 - y1, x2 - x1);
+
+                // Slot as elongated hole
+                const slotGeom = new THREE.BoxGeometry(length + radius * 2, radius * 2, pcbThickness + 0.2);
+                const slotMesh = new THREE.Mesh(slotGeom, holeMaterial.clone());
+                slotMesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, 0);
+                slotMesh.rotation.z = angle;
+                this.pcbGroup.add(slotMesh);
+            }
+        }
+    }
+
+    render3D() {
+        if (!this.renderer || !this.scene || !this.camera) return;
+
+        // Update group rotation from controls
+        this.pcbGroup.rotation.x = this.controls3D.targetRotation.x;
+        this.pcbGroup.rotation.y = this.controls3D.targetRotation.y;
+
+        // Apply view rotation on top of orbit
+        let baseRotZ = 0;
+        if (this.rotation === 90) baseRotZ = Math.PI / 2;
+        else if (this.rotation === 180) baseRotZ = Math.PI;
+        this.pcbGroup.rotation.z = baseRotZ;
+
+        // Apply flip
+        this.pcbGroup.scale.x = this.flipH ? -1 : 1;
+        this.pcbGroup.scale.y = this.flipV ? -1 : 1;
+
+        this.renderer.render(this.scene, this.camera);
+    }
+
     setView(view) {
         this.layers.forEach(l => {
             if (view === 'all') l.visible = true;
@@ -305,6 +796,7 @@ class GerberViewer {
         });
         this.updateLayerList();
         this.render();
+        if (this.viewMode === '3d') this.build3DModel();
     }
     
     async loadFiles(fileList) {
@@ -326,8 +818,19 @@ class GerberViewer {
         this.updateStats();
         if (this.layers.length > 0) {
             document.getElementById('emptyState').style.display = 'none';
-            this.canvas2d.style.display = 'block';
+            if (this.viewMode === '2d') {
+                this.canvas2d.style.display = 'block';
+                this.canvas3d.style.display = 'none';
+            } else {
+                this.canvas2d.style.display = 'none';
+                this.canvas3d.style.display = 'block';
+            }
+            this.setView('top');
             this.fit();
+            if (this.viewMode === '3d') {
+                this.resize3D();
+                this.build3DModel();
+            }
         }
         document.getElementById('loading').classList.remove('show');
     }
@@ -860,6 +1363,7 @@ class GerberViewer {
         this.layers.forEach(l => l.visible = v);
         this.updateLayerList();
         this.render();
+        if (this.viewMode === '3d') this.build3DModel();
     }
     
     render() {
@@ -1165,6 +1669,7 @@ class GerberViewer {
         this.layers[i].visible = !this.layers[i].visible;
         this.updateLayerList();
         this.render();
+        if (this.viewMode === '3d') this.build3DModel();
     }
     
     removeFile(i) {
@@ -1177,11 +1682,13 @@ class GerberViewer {
         if (!this.layers.length) {
             document.getElementById('emptyState').style.display = 'flex';
             this.canvas2d.style.display = 'none';
+            this.canvas3d.style.display = 'none';
         } else {
             this.fit();
+            if (this.viewMode === '3d') this.build3DModel();
         }
     }
-    
+
     clear() {
         this.files = [];
         this.layers = [];
@@ -1191,13 +1698,34 @@ class GerberViewer {
         this.updateStats();
         document.getElementById('emptyState').style.display = 'flex';
         this.canvas2d.style.display = 'none';
+        this.canvas3d.style.display = 'none';
+        // Clear 3D scene
+        if (this.pcbGroup) {
+            while (this.pcbGroup.children.length > 0) {
+                const child = this.pcbGroup.children[0];
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+                this.pcbGroup.remove(child);
+            }
+        }
     }
-    
+
     exportPng() {
         if (!this.layers.length) return;
         const a = document.createElement('a');
         a.download = 'pcb.png';
-        a.href = this.canvas2d.toDataURL('image/png');
+        if (this.viewMode === '3d') {
+            this.render3D();
+            a.href = this.canvas3d.toDataURL('image/png');
+        } else {
+            a.href = this.canvas2d.toDataURL('image/png');
+        }
         a.click();
     }
 }
