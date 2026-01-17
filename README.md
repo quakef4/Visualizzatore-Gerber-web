@@ -19,7 +19,7 @@ Un visualizzatore di file Gerber e Excellon moderno, leggero e completamente cli
 
 ## 🚀 Demo
 
-Apri `index.html` nel tuo browser oppure visita: [GitHub Pages Demo](https://quakef4.github.io/gerber-viewer/)
+Apri `index.html` nel tuo browser oppure visita: [GitHub Pages Demo](https://tuousername.github.io/gerber-viewer/)
 
 ## 📁 Formati Supportati
 
@@ -65,7 +65,7 @@ Scarica `index.html` e aprilo nel browser. Fine!
 1. Fai fork di questo repository
 2. Vai su Settings → Pages
 3. Seleziona branch `main` e cartella `/ (root)`
-4. Il tuo viewer sarà disponibile su `https://quakef4.github.io/gerber-viewer/`
+4. Il tuo viewer sarà disponibile su `https://tuousername.github.io/gerber-viewer/`
 
 ### Opzione 3: Server locale
 ```bash

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerber Viewer Pro v21</title>
+    <title>Gerber Viewer Pro v22</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         :root { --bg:#0c0c0c; --panel:#141414; --surface:#1e1e1e; --border:#2a2a2a; --text:#e0e0e0; --text2:#666; --accent:#22c55e; }
@@ -96,7 +96,7 @@
 <body>
 <div class="app">
     <header>
-        <div class="logo"><div class="logo-icon">◫</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v21</small></div>
+        <div class="logo"><div class="logo-icon">◫</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v22</small></div>
         <div class="header-actions">
             <button class="btn" id="btnClear">🗑️ Pulisci</button>
             <button class="btn" id="btnExport">📷 Esporta</button>
@@ -335,7 +335,7 @@ class GerberViewer {
     async extractZip(zipFile) {
         const zip = await JSZip.loadAsync(zipFile);
         const files = [];
-        const ext = ['gtl','gbl','gts','gbs','gto','gbo','drl','xln','gko','gm1','gbr','ger','gtp','gbp','txt'];
+        const ext = ['gtl','gbl','gts','gbs','gto','gbo','drl','xln','gko','gm1','gbr','ger','gtp','gbp','txt','gdl','gme'];
         for (const [name, entry] of Object.entries(zip.files)) {
             if (!entry.dir && ext.includes(name.split('.').pop().toLowerCase())) {
                 files.push(new File([await entry.async('string')], name.split('/').pop()));
@@ -346,8 +346,8 @@ class GerberViewer {
     
     detectLayerType(name, ext) {
         const n = name.toLowerCase();
-        if (n.includes('toplayer') || n.includes('top_copper') || n.includes('-f_cu') || n.includes('_top.') || ext==='gtl') return {type:'copper',side:'top',order:10};
-        if (n.includes('bottomlayer') || n.includes('bottom_copper') || n.includes('-b_cu') || n.includes('_bottom.') || ext==='gbl') return {type:'copper',side:'bottom',order:11};
+        if (n.includes('toplayer') || n.includes('top_copper') || n.includes('-f_cu') || ext==='gtl') return {type:'copper',side:'top',order:10};
+        if (n.includes('bottomlayer') || n.includes('bottom_copper') || n.includes('-b_cu') || ext==='gbl') return {type:'copper',side:'bottom',order:11};
         if (n.includes('topsoldermask') || n.includes('topmask') || n.includes('-f_mask') || ext==='gts') return {type:'mask',side:'top',order:20};
         if (n.includes('bottomsoldermask') || n.includes('bottommask') || n.includes('-b_mask') || ext==='gbs') return {type:'mask',side:'bottom',order:21};
         if (n.includes('topsilk') || n.includes('-f_silks') || ext==='gto') return {type:'silk',side:'top',order:30};
@@ -372,255 +372,266 @@ class GerberViewer {
     }
     
     parseGerber(name, text, info) {
-        let xInt=2, xDec=4, unit='mm';
+        // Format defaults
+        let xInt = 2, xDec = 4, unit = 'mm';
         const apertures = {};
         const macros = {};
-        let curAp=null, x=0, y=0, interp='linear', polarity='dark', inRegion=false, regionPts=[];
+        let curAp = null, x = 0, y = 0, interp = 'linear', polarity = 'dark';
+        let inRegion = false, regionPts = [];
         const cmds = [];
         
-        const parseCoord = (s, intD, decD) => {
+        // Calculate coordinate divisor based on decimal places
+        const getScale = () => Math.pow(10, xDec) * (unit === 'in' ? 1/25.4 : 1);
+        
+        // Parse coordinate string to mm
+        const parseCoord = (s) => {
             if (!s) return null;
-            let neg = s.startsWith('-');
+            const neg = s.startsWith('-');
             if (neg) s = s.slice(1);
-            s = s.padStart(intD + decD, '0');
-            let v = parseFloat(s.slice(0, -decD) + '.' + s.slice(-decD));
-            return (neg ? -v : v) * (unit==='in' ? 25.4 : 1);
+            // Pad to full length
+            s = s.padStart(xInt + xDec, '0');
+            const intPart = s.slice(0, s.length - xDec);
+            const decPart = s.slice(s.length - xDec);
+            let val = parseFloat(intPart + '.' + decPart);
+            if (neg) val = -val;
+            return unit === 'in' ? val * 25.4 : val;
         };
         
-        // First pass: extract all aperture macros
-        const macroRegex = /%AM([A-Za-z_][A-Za-z0-9_]*)\*([^%]*)/g;
-        let macroMatch;
-        while ((macroMatch = macroRegex.exec(text)) !== null) {
-            const macroName = macroMatch[1];
-            const macroBody = macroMatch[2];
-            macros[macroName] = this.parseMacro(macroBody);
+        // First pass: extract macros
+        const macroRegex = /%AM([A-Za-z_][A-Za-z0-9_]*)\*([^%]*?)%/gs;
+        let match;
+        while ((match = macroRegex.exec(text)) !== null) {
+            macros[match[1]] = match[2];
         }
         
+        // Process lines
         const lines = text.split(/\r?\n/);
         for (const line of lines) {
             const l = line.trim();
             if (!l || l.startsWith('G04')) continue;
             
-            // Format specification
-            let m = l.match(/%FSLAX(\d)(\d)Y(\d)(\d)\*%/);
-            if (m) { xInt=+m[1]; xDec=+m[2]; continue; }
-            if (l.includes('%MOMM')) { unit='mm'; continue; }
-            if (l.includes('%MOIN')) { unit='in'; continue; }
+            // Format spec: %FSLAX45Y45*%
+            let m = l.match(/%FSLAX(\d)(\d)Y\d+\*%/);
+            if (m) { xInt = +m[1]; xDec = +m[2]; continue; }
             
-            // Standard aperture definition
+            // Unit
+            if (l.includes('%MOMM')) { unit = 'mm'; continue; }
+            if (l.includes('%MOIN')) { unit = 'in'; continue; }
+            
+            // Standard aperture: %ADD10C,0.5*% or %ADD10R,1.0X0.5*%
             m = l.match(/%ADD(\d+)([CROP]),?([^*]*)\*%/);
             if (m) {
+                const num = m[1], type = m[2];
                 const params = m[3] ? m[3].split('X').map(Number) : [0];
-                apertures[m[1]] = {type: m[2], params: params};
+                apertures[num] = { type, params, rotation: 0 };
                 continue;
             }
             
-            // Macro aperture definition
+            // Macro aperture: %ADD12MACRO1,0.5X0.8X90*%
             m = l.match(/%ADD(\d+)([A-Za-z_][A-Za-z0-9_]*),?([^*]*)\*%/);
             if (m && !['C','R','O','P'].includes(m[2])) {
-                const apNum = m[1];
-                const macroName = m[2];
+                const num = m[1], macroName = m[2];
                 const params = m[3] ? m[3].split('X').map(Number) : [];
                 
                 if (macros[macroName]) {
-                    apertures[apNum] = this.evaluateMacro(macros[macroName], params, unit);
+                    apertures[num] = this.evaluateMacro(macros[macroName], params);
                 } else {
-                    // Fallback
-                    apertures[apNum] = {type: 'C', params: [0.5]};
+                    // Unknown macro, fallback
+                    apertures[num] = { type: 'C', params: [0.5], rotation: 0 };
                 }
                 continue;
             }
             
-            if (l.includes('%LPD')) { polarity='dark'; continue; }
-            if (l.includes('%LPC')) { polarity='clear'; continue; }
+            // Polarity
+            if (l.includes('%LPD')) { polarity = 'dark'; continue; }
+            if (l.includes('%LPC')) { polarity = 'clear'; continue; }
             
+            // Process commands
             for (const cmd of l.split('*').filter(c => c.trim())) {
                 const c = cmd.trim();
                 
+                // Interpolation mode
                 if (c === 'G01' || c === 'G1') { interp = 'linear'; continue; }
                 if (c === 'G02' || c === 'G2') { interp = 'cw'; continue; }
                 if (c === 'G03' || c === 'G3') { interp = 'ccw'; continue; }
                 if (c === 'G74' || c === 'G75') continue;
+                
+                // Region
                 if (c === 'G36') { inRegion = true; regionPts = []; continue; }
                 if (c === 'G37') {
                     if (regionPts.length >= 3) {
-                        const f = regionPts[0], last = regionPts[regionPts.length-1];
-                        if (Math.abs(f.x-last.x) > 0.001 || Math.abs(f.y-last.y) > 0.001) regionPts.push({x:f.x,y:f.y});
-                        cmds.push({type:'region', points:[...regionPts], polarity});
+                        cmds.push({ type: 'region', points: [...regionPts], polarity });
                     }
-                    inRegion = false; continue;
+                    inRegion = false;
+                    continue;
                 }
                 
+                // Aperture select: D10, D11, etc.
                 m = c.match(/^D(\d+)$/);
                 if (m && +m[1] >= 10) { curAp = m[1]; continue; }
                 
+                // Coordinate move/draw
                 m = c.match(/^(?:G0?([123]))?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?(?:D0?([123]))?$/);
                 if (m && (m[2] || m[3] || m[6])) {
+                    // Update interpolation if specified
                     if (m[1]) {
-                        if (m[1]==='1') interp = 'linear';
-                        else if (m[1]==='2') interp = 'cw';
-                        else if (m[1]==='3') interp = 'ccw';
+                        if (m[1] === '1') interp = 'linear';
+                        else if (m[1] === '2') interp = 'cw';
+                        else if (m[1] === '3') interp = 'ccw';
                     }
                     
-                    const ox=x, oy=y;
-                    if (m[2]) x = parseCoord(m[2], xInt, xDec);
-                    if (m[3]) y = parseCoord(m[3], xInt, xDec);
-                    const i = m[4] ? parseCoord(m[4], xInt, xDec) : 0;
-                    const j = m[5] ? parseCoord(m[5], xInt, xDec) : 0;
+                    const ox = x, oy = y;
+                    if (m[2]) x = parseCoord(m[2]);
+                    if (m[3]) y = parseCoord(m[3]);
+                    const i = m[4] ? parseCoord(m[4]) : 0;
+                    const j = m[5] ? parseCoord(m[5]) : 0;
                     const d = m[6] ? +m[6] : null;
                     
                     if (inRegion) {
                         if (d === 2) {
-                            if (regionPts.length >= 3) cmds.push({type:'region', points:[...regionPts], polarity});
-                            regionPts = [{x,y}];
+                            // Move - start new region
+                            if (regionPts.length >= 3) {
+                                cmds.push({ type: 'region', points: [...regionPts], polarity });
+                            }
+                            regionPts = [{ x, y }];
                         } else if (d === 1 || d === null) {
-                            if (!regionPts.length) regionPts.push({x:ox,y:oy});
-                            if (interp === 'linear') regionPts.push({x,y});
-                            else regionPts.push(...this.arcToPoints(ox,oy,x,y,i,j,interp==='cw'));
+                            if (!regionPts.length) regionPts.push({ x: ox, y: oy });
+                            if (interp === 'linear') {
+                                regionPts.push({ x, y });
+                            } else {
+                                regionPts.push(...this.arcToPoints(ox, oy, x, y, i, j, interp === 'cw'));
+                            }
                         }
                     } else {
                         if (d === 1) {
-                            const ap = apertures[curAp] || {type:'C',params:[0.1]};
+                            // Draw
+                            const ap = apertures[curAp] || { type: 'C', params: [0.1] };
                             if (interp === 'linear') {
-                                cmds.push({type:'line',x1:ox,y1:oy,x2:x,y2:y,width:ap.params[0]||0.1,polarity});
+                                cmds.push({ type: 'line', x1: ox, y1: oy, x2: x, y2: y, width: ap.params[0] || 0.1, polarity });
                             } else {
-                                cmds.push({type:'arc',x1:ox,y1:oy,x2:x,y2:y,i,j,cw:interp==='cw',width:ap.params[0]||0.1,polarity});
+                                cmds.push({ type: 'arc', x1: ox, y1: oy, x2: x, y2: y, i, j, cw: interp === 'cw', width: ap.params[0] || 0.1, polarity });
                             }
                         } else if (d === 3) {
-                            const ap = apertures[curAp] || {type:'C',params:[0.5]};
-                            cmds.push({type:'flash',x,y,aperture:ap,polarity});
+                            // Flash
+                            const ap = apertures[curAp] || { type: 'C', params: [0.5] };
+                            cmds.push({ type: 'flash', x, y, aperture: ap, polarity });
                         }
                     }
                 }
             }
         }
         
-        console.log(`[${name}] Apertures:`, Object.keys(apertures).length, 'Commands:', cmds.length);
-        return {name, ...info, cmds, visible:true};
+        console.log(`[${name}] Format: ${xInt}.${xDec}, Unit: ${unit}, Apertures: ${Object.keys(apertures).length}, Commands: ${cmds.length}`);
+        return { name, ...info, cmds, visible: true };
     }
     
-    parseMacro(body) {
-        // Parse macro body - extract primitives
-        const primitives = [];
-        const parts = body.split('*').filter(p => p.trim());
+    evaluateMacro(macroBody, params) {
+        // Parse macro primitives and evaluate with parameters
+        const primitives = macroBody.split('*').filter(p => p.trim());
         
-        for (const part of parts) {
-            const p = part.trim();
-            if (!p || p.startsWith('0')) continue;
-            
-            // Split by comma, handling negative numbers
-            const values = p.split(',').map(v => v.trim());
-            const code = parseInt(values[0]);
-            
-            if (code === 1) {
-                // Circle: 1,exposure,diameter,cx,cy
-                primitives.push({
-                    type: 'circle',
-                    exposure: parseFloat(values[1]) || 1,
-                    diameter: parseFloat(values[2]) || 0,
-                    cx: parseFloat(values[3]) || 0,
-                    cy: parseFloat(values[4]) || 0
-                });
-            } else if (code === 4) {
-                // Outline/Polygon: 4,exposure,n_vertices,x0,y0,x1,y1,...,rotation
-                const exposure = parseFloat(values[1]) || 1;
-                const nVertices = parseInt(values[2]) || 0;
-                const coords = values.slice(3, 3 + (nVertices + 1) * 2).map(parseFloat);
-                const vertices = [];
-                for (let i = 0; i < coords.length; i += 2) {
-                    vertices.push({x: coords[i] || 0, y: coords[i+1] || 0});
-                }
-                primitives.push({
-                    type: 'outline',
-                    exposure: exposure,
-                    vertices: vertices
-                });
-            } else if (code === 5) {
-                // Polygon: 5,exposure,n_vertices,cx,cy,diameter,rotation
-                primitives.push({
-                    type: 'polygon',
-                    exposure: parseFloat(values[1]) || 1,
-                    nVertices: parseInt(values[2]) || 4,
-                    cx: parseFloat(values[3]) || 0,
-                    cy: parseFloat(values[4]) || 0,
-                    diameter: parseFloat(values[5]) || 0,
-                    rotation: parseFloat(values[6]) || 0
-                });
-            } else if (code === 20 || code === 2) {
-                // Vector line
-                primitives.push({
-                    type: 'vectorLine',
-                    exposure: parseFloat(values[1]) || 1,
-                    width: parseFloat(values[2]) || 0,
-                    x1: parseFloat(values[3]) || 0,
-                    y1: parseFloat(values[4]) || 0,
-                    x2: parseFloat(values[5]) || 0,
-                    y2: parseFloat(values[6]) || 0
-                });
-            } else if (code === 21) {
-                // Center rectangle
-                primitives.push({
-                    type: 'centerRect',
-                    exposure: parseFloat(values[1]) || 1,
-                    width: parseFloat(values[2]) || 0,
-                    height: parseFloat(values[3]) || 0,
-                    cx: parseFloat(values[4]) || 0,
-                    cy: parseFloat(values[5]) || 0,
-                    rotation: parseFloat(values[6]) || 0
-                });
+        // Function to evaluate expression with $n variables
+        const evalExpr = (expr) => {
+            if (expr === undefined || expr === null) return 0;
+            let s = String(expr).trim();
+            // Replace $n with parameter values
+            s = s.replace(/\$(\d+)/g, (_, n) => {
+                const idx = parseInt(n) - 1;
+                return params[idx] !== undefined ? params[idx] : 0;
+            });
+            // Handle 'x' as multiply
+            s = s.replace(/x/gi, '*');
+            try {
+                return eval(s);
+            } catch {
+                return parseFloat(s) || 0;
             }
-        }
-        
-        return primitives;
-    }
-    
-    evaluateMacro(primitives, params, unit) {
-        const scale = unit === 'in' ? 25.4 : 1;
+        };
         
         for (const prim of primitives) {
-            if (prim.type === 'outline' && prim.vertices && prim.vertices.length >= 3) {
-                // Calculate bounding box of the outline polygon
+            const p = prim.trim();
+            if (!p || p.startsWith('0')) continue; // Skip comments
+            
+            const parts = p.split(',');
+            const code = parseInt(parts[0]);
+            
+            if (code === 1) {
+                // Circle: 1,exposure,diameter,cx,cy[,rotation]
+                const d = evalExpr(parts[2]);
+                return { type: 'C', params: [d], rotation: 0 };
+            } else if (code === 4) {
+                // Outline: 4,exposure,n_vertices,x0,y0,x1,y1,...,rotation
+                const nVerts = parseInt(parts[2]) || 0;
+                const vertices = [];
+                for (let i = 0; i <= nVerts; i++) {
+                    vertices.push({
+                        x: evalExpr(parts[3 + i * 2]),
+                        y: evalExpr(parts[4 + i * 2])
+                    });
+                }
+                // Calculate bounding box
                 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                for (const v of prim.vertices) {
+                for (const v of vertices) {
                     if (v.x < minX) minX = v.x;
                     if (v.y < minY) minY = v.y;
                     if (v.x > maxX) maxX = v.x;
                     if (v.y > maxY) maxY = v.y;
                 }
-                const w = (maxX - minX) * scale;
-                const h = (maxY - minY) * scale;
-                
-                // Store as polygon aperture with actual vertices for accurate rendering
-                return {
-                    type: 'POLY',
-                    params: [w, h],
-                    vertices: prim.vertices.map(v => ({x: v.x * scale, y: v.y * scale}))
-                };
-            } else if (prim.type === 'centerRect') {
-                const w = prim.width * scale;
-                const h = prim.height * scale;
-                return {type: 'R', params: [w, h]};
-            } else if (prim.type === 'circle') {
-                const d = prim.diameter * scale;
-                return {type: 'C', params: [d]};
-            } else if (prim.type === 'polygon') {
-                const d = prim.diameter * scale;
-                return {type: 'P', params: [d, prim.nVertices, prim.rotation]};
+                return { type: 'POLY', params: [maxX - minX, maxY - minY], vertices, rotation: 0 };
+            } else if (code === 5) {
+                // Polygon: 5,exposure,n_vertices,cx,cy,diameter,rotation
+                const nVerts = parseInt(evalExpr(parts[2])) || 4;
+                const d = evalExpr(parts[5]);
+                const rot = evalExpr(parts[6]) || 0;
+                return { type: 'P', params: [d, nVerts, rot], rotation: 0 };
+            } else if (code === 20 || code === 2) {
+                // Vector line: 20,exposure,width,x1,y1,x2,y2,rotation
+                const w = evalExpr(parts[2]);
+                return { type: 'C', params: [w], rotation: 0 };
+            } else if (code === 21) {
+                // Center rectangle: 21,exposure,width,height,cx,cy,rotation
+                const w = evalExpr(parts[2]);
+                const h = evalExpr(parts[3]);
+                const rot = evalExpr(parts[6]) || 0;
+                return { type: 'R', params: [w, h], rotation: rot };
+            } else if (code === 22) {
+                // Lower-left rectangle: 22,exposure,width,height,x,y,rotation
+                const w = evalExpr(parts[2]);
+                const h = evalExpr(parts[3]);
+                const rot = evalExpr(parts[6]) || 0;
+                return { type: 'R', params: [w, h], rotation: rot };
             }
         }
         
-        // Fallback
-        return {type: 'C', params: [0.5]};
+        // Fallback: if params look like width/height, use rectangle
+        if (params.length >= 2 && params[0] > 0 && params[1] > 0) {
+            const rot = params[2] || 0;
+            return { type: 'R', params: [params[0], params[1]], rotation: rot };
+        }
+        
+        return { type: 'C', params: [params[0] || 0.5], rotation: 0 };
     }
     
-    arcToPoints(x1,y1,x2,y2,i,j,cw) {
-        const cx=x1+i, cy=y1+j, r=Math.sqrt(i*i+j*j);
-        if (r < 0.0001) return [{x:x2,y:y2}];
-        let a1 = Math.atan2(y1-cy, x1-cx), a2 = Math.atan2(y2-cy, x2-cx);
-        if (Math.abs(x1-x2)<0.01 && Math.abs(y1-y2)<0.01) a2 = cw ? a1-Math.PI*2 : a1+Math.PI*2;
-        else { if (cw && a2>=a1) a2-=Math.PI*2; if (!cw && a2<=a1) a2+=Math.PI*2; }
-        const pts=[], steps=Math.max(72, Math.ceil(Math.abs(a2-a1)*r/0.1));
-        for (let n=1; n<=steps; n++) { const a=a1+(a2-a1)*n/steps; pts.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)}); }
+    arcToPoints(x1, y1, x2, y2, i, j, cw) {
+        const cx = x1 + i, cy = y1 + j;
+        const r = Math.sqrt(i * i + j * j);
+        if (r < 0.0001) return [{ x: x2, y: y2 }];
+        
+        let a1 = Math.atan2(y1 - cy, x1 - cx);
+        let a2 = Math.atan2(y2 - cy, x2 - cx);
+        
+        if (Math.abs(x1 - x2) < 0.01 && Math.abs(y1 - y2) < 0.01) {
+            a2 = cw ? a1 - Math.PI * 2 : a1 + Math.PI * 2;
+        } else {
+            if (cw && a2 >= a1) a2 -= Math.PI * 2;
+            if (!cw && a2 <= a1) a2 += Math.PI * 2;
+        }
+        
+        const pts = [];
+        const steps = Math.max(72, Math.ceil(Math.abs(a2 - a1) * r / 0.1));
+        for (let n = 1; n <= steps; n++) {
+            const a = a1 + (a2 - a1) * n / steps;
+            pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+        }
         return pts;
     }
     
@@ -628,7 +639,7 @@ class GerberViewer {
         const tools = {};
         let curTool = null;
         let unit = 'mm';
-        let formatInt = 3, formatDec = 3; // Default EasyEDA format
+        let formatInt = 3, formatDec = 3;
         const cmds = [];
         let inHeader = true;
         
@@ -638,23 +649,17 @@ class GerberViewer {
             const l = line.trim();
             if (!l || l.startsWith(';')) continue;
             
-            // End of header
             if (l === '%' || l === 'M95') { inHeader = false; continue; }
             if (l === 'M30' || l === 'M00') break;
             
-            // Format detection from FILE_FORMAT comment
+            // Format from comment
             let m = l.match(/FILE_FORMAT=(\d):(\d)/i);
-            if (m) {
-                formatInt = parseInt(m[1]);
-                formatDec = parseInt(m[2]);
-                continue;
-            }
+            if (m) { formatInt = +m[1]; formatDec = +m[2]; continue; }
             
-            // Unit and format: METRIC,LZ,000.000 or INCH,TZ
+            // Unit/format line
             m = l.match(/^(METRIC|INCH),?(LZ|TZ)?,?(\d+\.?\d*)?/i);
             if (m) {
                 unit = m[1].toUpperCase() === 'INCH' ? 'in' : 'mm';
-                // Parse format like 000.000
                 if (m[3] && m[3].includes('.')) {
                     const parts = m[3].split('.');
                     formatInt = parts[0].length;
@@ -663,18 +668,17 @@ class GerberViewer {
                 continue;
             }
             
-            // Tool definition: T01C0.305
+            // Tool definition
             m = l.match(/T(\d+)C([\d.]+)/i);
             if (m) {
                 let dia = parseFloat(m[2]);
-                // Tool diameter is in file's unit
                 if (unit === 'in') dia *= 25.4;
                 tools[m[1]] = dia;
-                tools[parseInt(m[1]).toString()] = dia; // Store without leading zeros
+                tools[parseInt(m[1]).toString()] = dia;
                 continue;
             }
             
-            // Tool selection: T01
+            // Tool select
             m = l.match(/^T(\d+)$/i);
             if (m) {
                 curTool = m[1];
@@ -684,32 +688,32 @@ class GerberViewer {
             
             if (inHeader) continue;
             
-            // Slot: X...Y...G85X...Y...
+            // Slot
             m = line.match(/X([+-]?\d+)Y([+-]?\d+)G85X([+-]?\d+)Y([+-]?\d+)/i);
             if (m && curTool) {
-                const divisor = Math.pow(10, formatDec);
-                let x1 = parseInt(m[1]) / divisor;
-                let y1 = parseInt(m[2]) / divisor;
-                let x2 = parseInt(m[3]) / divisor;
-                let y2 = parseInt(m[4]) / divisor;
+                const div = Math.pow(10, formatDec);
+                let x1 = parseInt(m[1]) / div;
+                let y1 = parseInt(m[2]) / div;
+                let x2 = parseInt(m[3]) / div;
+                let y2 = parseInt(m[4]) / div;
                 if (unit === 'in') { x1 *= 25.4; y1 *= 25.4; x2 *= 25.4; y2 *= 25.4; }
-                cmds.push({type: 'slot', x1, y1, x2, y2, diameter: tools[curTool] || 0.8});
+                cmds.push({ type: 'slot', x1, y1, x2, y2, diameter: tools[curTool] || 0.8 });
                 continue;
             }
             
-            // Drill: X...Y...
+            // Drill
             m = line.match(/^X([+-]?\d+)Y([+-]?\d+)$/i);
             if (m && curTool) {
-                const divisor = Math.pow(10, formatDec);
-                let dx = parseInt(m[1]) / divisor;
-                let dy = parseInt(m[2]) / divisor;
+                const div = Math.pow(10, formatDec);
+                let dx = parseInt(m[1]) / div;
+                let dy = parseInt(m[2]) / div;
                 if (unit === 'in') { dx *= 25.4; dy *= 25.4; }
-                cmds.push({type: 'drill', x: dx, y: dy, diameter: tools[curTool] || 0.8});
+                cmds.push({ type: 'drill', x: dx, y: dy, diameter: tools[curTool] || 0.8 });
             }
         }
         
-        console.log(`[${name}] Drill: Unit=${unit}, Format=${formatInt}.${formatDec}, Tools=${Object.keys(tools).length}, Holes=${cmds.length}`);
-        return {name, ...info, cmds, visible: true};
+        console.log(`[${name}] Drill: ${formatInt}.${formatDec}, Unit: ${unit}, Tools: ${Object.keys(tools).length}, Holes: ${cmds.length}`);
+        return { name, ...info, cmds, visible: true };
     }
     
     extractBoardOutline() {
@@ -719,13 +723,17 @@ class GerberViewer {
         const segments = [];
         for (const cmd of ol.cmds) {
             if (cmd.type === 'line') {
-                segments.push({ type:'line', x1:cmd.x1, y1:cmd.y1, x2:cmd.x2, y2:cmd.y2, used:false });
+                segments.push({ x1: cmd.x1, y1: cmd.y1, x2: cmd.x2, y2: cmd.y2, used: false });
             } else if (cmd.type === 'arc') {
-                const arcPts = this.arcToPoints(cmd.x1,cmd.y1,cmd.x2,cmd.y2,cmd.i,cmd.j,cmd.cw);
-                segments.push({ type:'arc', x1:cmd.x1, y1:cmd.y1, x2:cmd.x2, y2:cmd.y2, arcPts, used:false });
+                const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+                let px = cmd.x1, py = cmd.y1;
+                for (const p of pts) {
+                    segments.push({ x1: px, y1: py, x2: p.x, y2: p.y, used: false });
+                    px = p.x; py = p.y;
+                }
             } else if (cmd.type === 'region' && cmd.points.length >= 3) {
                 for (let i = 0; i < cmd.points.length - 1; i++) {
-                    segments.push({ type:'line', x1:cmd.points[i].x, y1:cmd.points[i].y, x2:cmd.points[i+1].x, y2:cmd.points[i+1].y, used:false });
+                    segments.push({ x1: cmd.points[i].x, y1: cmd.points[i].y, x2: cmd.points[i+1].x, y2: cmd.points[i+1].y, used: false });
                 }
             }
         }
@@ -736,51 +744,33 @@ class GerberViewer {
         
         let current = segments[0];
         current.used = true;
-        
-        const path = [{x: current.x1, y: current.y1}];
-        if (current.type === 'arc' && current.arcPts) path.push(...current.arcPts);
-        else path.push({x: current.x2, y: current.y2});
-        
+        const path = [{ x: current.x1, y: current.y1 }, { x: current.x2, y: current.y2 }];
         let endX = current.x2, endY = current.y2;
-        const MAX_GAP = 2.0;
         
         for (let iter = 0; iter < segments.length * 2; iter++) {
-            let bestSeg = null, bestDist = Infinity, bestReversed = false;
-            
+            let best = null, bestDist = Infinity, reversed = false;
             for (const seg of segments) {
                 if (seg.used) continue;
                 const d1 = dist(endX, endY, seg.x1, seg.y1);
                 const d2 = dist(endX, endY, seg.x2, seg.y2);
-                if (d1 < bestDist) { bestDist = d1; bestSeg = seg; bestReversed = false; }
-                if (d2 < bestDist) { bestDist = d2; bestSeg = seg; bestReversed = true; }
+                if (d1 < bestDist) { bestDist = d1; best = seg; reversed = false; }
+                if (d2 < bestDist) { bestDist = d2; best = seg; reversed = true; }
             }
-            
-            if (!bestSeg || bestDist > MAX_GAP) break;
-            bestSeg.used = true;
-            
-            if (bestDist > 0.01) {
-                path.push({x: bestReversed ? bestSeg.x2 : bestSeg.x1, y: bestReversed ? bestSeg.y2 : bestSeg.y1});
-            }
-            
-            if (bestSeg.type === 'arc' && bestSeg.arcPts) {
-                const pts = bestReversed ? [...bestSeg.arcPts].reverse() : bestSeg.arcPts;
-                path.push(...pts);
-            } else {
-                path.push({x: bestReversed ? bestSeg.x1 : bestSeg.x2, y: bestReversed ? bestSeg.y1 : bestSeg.y2});
-            }
-            
-            endX = bestReversed ? bestSeg.x1 : bestSeg.x2;
-            endY = bestReversed ? bestSeg.y1 : bestSeg.y2;
+            if (!best || bestDist > 2) break;
+            best.used = true;
+            path.push({ x: reversed ? best.x1 : best.x2, y: reversed ? best.y1 : best.y2 });
+            endX = reversed ? best.x1 : best.x2;
+            endY = reversed ? best.y1 : best.y2;
         }
         
         this.boardOutline = path;
     }
     
     calcBounds() {
-        let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const l of this.layers) {
             for (const c of l.cmds) {
-                const pts = c.points || (c.x!==undefined ? [{x:c.x,y:c.y}] : [{x:c.x1,y:c.y1},{x:c.x2,y:c.y2}]);
+                const pts = c.points || (c.x !== undefined ? [{ x: c.x, y: c.y }] : [{ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 }]);
                 for (const p of pts) {
                     if (p.x < minX) minX = p.x;
                     if (p.y < minY) minY = p.y;
@@ -789,16 +779,20 @@ class GerberViewer {
                 }
             }
         }
-        if (minX !== Infinity) this.bounds = {minX, minY, maxX, maxY};
+        if (minX !== Infinity) this.bounds = { minX, minY, maxX, maxY };
     }
     
     updateStats() {
-        if (!this.bounds) { document.getElementById('statSize').textContent = '-'; document.getElementById('statHoles').textContent = '-'; return; }
+        if (!this.bounds) {
+            document.getElementById('statSize').textContent = '-';
+            document.getElementById('statHoles').textContent = '-';
+            return;
+        }
+        
         const w = (this.bounds.maxX - this.bounds.minX).toFixed(1);
         const h = (this.bounds.maxY - this.bounds.minY).toFixed(1);
         document.getElementById('statSize').textContent = `${w} × ${h} mm`;
         
-        // Combine all drill layers
         const drillLayers = this.layers.filter(l => l.type === 'drill');
         if (drillLayers.length) {
             let totalDrills = 0, totalSlots = 0;
@@ -819,8 +813,10 @@ class GerberViewer {
             document.getElementById('statHoles').textContent = totalDrills + (totalSlots ? ` + ${totalSlots} slot` : '');
             
             const tbody = document.querySelector('#drillTable tbody');
-            tbody.innerHTML = Object.entries(toolStats).sort((a,b) => parseFloat(a[0]) - parseFloat(b[0]))
-                .map(([d, n], i) => `<tr><td>T${i+1}</td><td>${d}</td><td>${n}</td></tr>`).join('');
+            tbody.innerHTML = Object.entries(toolStats)
+                .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
+                .map(([d, n], i) => `<tr><td>T${i+1}</td><td>${d}</td><td>${n}</td></tr>`)
+                .join('');
             document.getElementById('drillTable').style.display = Object.keys(toolStats).length ? '' : 'none';
         } else {
             document.getElementById('statHoles').textContent = '-';
@@ -831,10 +827,13 @@ class GerberViewer {
     fit() {
         if (!this.bounds) return;
         const rect = document.getElementById('canvasContainer').getBoundingClientRect();
-        this.canvas2d.width = rect.width; this.canvas2d.height = rect.height;
+        this.canvas2d.width = rect.width;
+        this.canvas2d.height = rect.height;
         
-        const bw = this.bounds.maxX - this.bounds.minX, bh = this.bounds.maxY - this.bounds.minY;
-        const sw = (rect.width - 80) / bw, sh = (rect.height - 80) / bh;
+        const bw = this.bounds.maxX - this.bounds.minX;
+        const bh = this.bounds.maxY - this.bounds.minY;
+        const sw = (rect.width - 80) / bw;
+        const sh = (rect.height - 80) / bh;
         this.ppm = Math.min(sw, sh);
         this.zoom = 1;
         this.pan = { x: (rect.width - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
@@ -845,21 +844,31 @@ class GerberViewer {
     setZoom(z) {
         const old = this.zoom;
         this.zoom = Math.max(0.05, Math.min(50, z));
-        const cx = this.canvas2d.width/2, cy = this.canvas2d.height/2, s = this.zoom/old;
+        const cx = this.canvas2d.width / 2, cy = this.canvas2d.height / 2;
+        const s = this.zoom / old;
         this.pan.x = cx - (cx - this.pan.x) * s;
         this.pan.y = cy - (cy - this.pan.y) * s;
         this.updateZoomDisplay();
         this.render();
     }
     
-    updateZoomDisplay() { document.getElementById('zoomDisplay').textContent = Math.round(this.zoom*100)+'%'; }
-    setAllLayersVisible(v) { this.layers.forEach(l=>l.visible=v); this.updateLayerList(); this.render(); }
+    updateZoomDisplay() {
+        document.getElementById('zoomDisplay').textContent = Math.round(this.zoom * 100) + '%';
+    }
+    
+    setAllLayersVisible(v) {
+        this.layers.forEach(l => l.visible = v);
+        this.updateLayerList();
+        this.render();
+    }
     
     render() {
         if (!this.bounds || !this.layers.length) return;
         
-        const ctx = this.ctx, scale = this.ppm * this.zoom;
-        const bw = this.bounds.maxX - this.bounds.minX, bh = this.bounds.maxY - this.bounds.minY;
+        const ctx = this.ctx;
+        const scale = this.ppm * this.zoom;
+        const bw = this.bounds.maxX - this.bounds.minX;
+        const bh = this.bounds.maxY - this.bounds.minY;
         
         ctx.fillStyle = this.colors.bg;
         ctx.fillRect(0, 0, this.canvas2d.width, this.canvas2d.height);
@@ -868,7 +877,8 @@ class GerberViewer {
         ctx.translate(this.pan.x, this.pan.y);
         ctx.scale(scale, scale);
         
-        const cx = bw/2, cy = bh/2;
+        // Apply rotation and flip
+        const cx = bw / 2, cy = bh / 2;
         ctx.translate(cx, cy);
         if (this.rotation) ctx.rotate(this.rotation * Math.PI / 180);
         if (this.flipH) ctx.scale(-1, 1);
@@ -876,12 +886,14 @@ class GerberViewer {
         ctx.translate(-cx, -cy);
         ctx.translate(-this.bounds.minX, -this.bounds.minY);
         
-        // Clip to board and draw FR4
+        // Clip to board outline and fill FR4
         if (this.boardOutline?.length >= 3) {
             ctx.save();
             ctx.beginPath();
             ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
-            for (let i = 1; i < this.boardOutline.length; i++) ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            }
             ctx.closePath();
             ctx.clip();
             ctx.fillStyle = '#c19a6b';
@@ -891,10 +903,14 @@ class GerberViewer {
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
         
         if (this.copperOnly) {
-            for (const l of sorted) if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+            for (const l of sorted) {
+                if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+            }
         } else {
             // 1. Copper
-            for (const l of sorted) if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+            for (const l of sorted) {
+                if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+            }
             
             // 2. Solder mask
             for (const l of sorted) {
@@ -906,11 +922,15 @@ class GerberViewer {
             }
             
             // 3. Silkscreen
-            for (const l of sorted) if (l.visible && l.type === 'silk') this.renderLayer(l, ctx);
+            for (const l of sorted) {
+                if (l.visible && l.type === 'silk') this.renderLayer(l, ctx);
+            }
         }
         
         // 4. Drills
-        for (const l of sorted) if (l.visible && l.type === 'drill') this.renderDrillLayer(l, ctx);
+        for (const l of sorted) {
+            if (l.visible && l.type === 'drill') this.renderDrillLayer(l, ctx);
+        }
         
         if (this.boardOutline) ctx.restore();
         
@@ -921,7 +941,9 @@ class GerberViewer {
             ctx.lineWidth = 0.15;
             ctx.beginPath();
             ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
-            for (let i = 1; i < this.boardOutline.length; i++) ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            }
             ctx.closePath();
             ctx.stroke();
         }
@@ -932,12 +954,14 @@ class GerberViewer {
     renderSolderMask(layer, ctx) {
         ctx.save();
         
-        // Fill board with mask
+        // Fill board with mask color
         if (this.boardOutline?.length >= 3) {
             ctx.fillStyle = layer.color;
             ctx.beginPath();
             ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
-            for (let i = 1; i < this.boardOutline.length; i++) ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            }
             ctx.closePath();
             ctx.fill();
         }
@@ -953,7 +977,9 @@ class GerberViewer {
             if (cmd.type === 'region' && cmd.points.length >= 3) {
                 ctx.beginPath();
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
-                for (let i = 1; i < cmd.points.length; i++) ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                }
                 ctx.closePath();
                 ctx.fill();
             } else if (cmd.type === 'line') {
@@ -962,14 +988,6 @@ class GerberViewer {
                 ctx.beginPath();
                 ctx.moveTo(cmd.x1, cmd.y1);
                 ctx.lineTo(cmd.x2, cmd.y2);
-                ctx.stroke();
-            } else if (cmd.type === 'arc') {
-                ctx.lineWidth = cmd.width || 0.1;
-                ctx.lineCap = 'round';
-                const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
-                ctx.beginPath();
-                ctx.moveTo(cmd.x1, cmd.y1);
-                for (const p of pts) ctx.lineTo(p.x, p.y);
                 ctx.stroke();
             } else if (cmd.type === 'flash') {
                 this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
@@ -988,7 +1006,9 @@ class GerberViewer {
             if (cmd.type === 'region' && cmd.points.length >= 3) {
                 ctx.beginPath();
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
-                for (let i = 1; i < cmd.points.length; i++) ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                }
                 ctx.closePath();
                 ctx.fill();
             } else if (cmd.type === 'line') {
@@ -1048,69 +1068,75 @@ class GerberViewer {
     }
     
     drawFlash(ctx, x, y, ap) {
-        const t = ap.type, p = ap.params;
+        const t = ap.type;
+        const p = ap.params;
+        const rot = (ap.rotation || 0) * Math.PI / 180;
+        
+        ctx.save();
+        ctx.translate(x, y);
+        if (rot) ctx.rotate(rot);
         
         if (t === 'C') {
             ctx.beginPath();
-            ctx.arc(x, y, (p[0] || 0.5) / 2, 0, Math.PI * 2);
+            ctx.arc(0, 0, (p[0] || 0.5) / 2, 0, Math.PI * 2);
             ctx.fill();
         } else if (t === 'R') {
             const w = p[0] || 0.5;
             const h = p.length > 1 ? p[1] : w;
-            ctx.fillRect(x - w/2, y - h/2, w, h);
+            ctx.fillRect(-w / 2, -h / 2, w, h);
         } else if (t === 'O') {
             const w = p[0] || 0.5;
             const h = p.length > 1 ? p[1] : w;
             ctx.beginPath();
             if (Math.abs(w - h) < 0.001) {
-                ctx.arc(x, y, w/2, 0, Math.PI * 2);
+                ctx.arc(0, 0, w / 2, 0, Math.PI * 2);
             } else if (w > h) {
                 const r = h / 2, dx = (w - h) / 2;
-                ctx.moveTo(x - dx, y - r);
-                ctx.lineTo(x + dx, y - r);
-                ctx.arc(x + dx, y, r, -Math.PI/2, Math.PI/2);
-                ctx.lineTo(x - dx, y + r);
-                ctx.arc(x - dx, y, r, Math.PI/2, -Math.PI/2);
+                ctx.moveTo(-dx, -r);
+                ctx.lineTo(dx, -r);
+                ctx.arc(dx, 0, r, -Math.PI / 2, Math.PI / 2);
+                ctx.lineTo(-dx, r);
+                ctx.arc(-dx, 0, r, Math.PI / 2, -Math.PI / 2);
             } else {
                 const r = w / 2, dy = (h - w) / 2;
-                ctx.moveTo(x + r, y - dy);
-                ctx.lineTo(x + r, y + dy);
-                ctx.arc(x, y + dy, r, 0, Math.PI);
-                ctx.lineTo(x - r, y - dy);
-                ctx.arc(x, y - dy, r, Math.PI, 0);
+                ctx.moveTo(r, -dy);
+                ctx.lineTo(r, dy);
+                ctx.arc(0, dy, r, 0, Math.PI);
+                ctx.lineTo(-r, -dy);
+                ctx.arc(0, -dy, r, Math.PI, 0);
             }
             ctx.closePath();
             ctx.fill();
         } else if (t === 'P') {
             const od = p[0] || 0.5;
             const vertices = p[1] || 4;
-            const rotation = (p[2] || 0) * Math.PI / 180;
+            const pRot = (p[2] || 0) * Math.PI / 180;
             ctx.beginPath();
             for (let i = 0; i < vertices; i++) {
-                const angle = rotation + (i * 2 * Math.PI / vertices);
-                const px = x + (od/2) * Math.cos(angle);
-                const py = y + (od/2) * Math.sin(angle);
+                const angle = pRot + (i * 2 * Math.PI / vertices);
+                const px = (od / 2) * Math.cos(angle);
+                const py = (od / 2) * Math.sin(angle);
                 if (i === 0) ctx.moveTo(px, py);
                 else ctx.lineTo(px, py);
             }
             ctx.closePath();
             ctx.fill();
         } else if (t === 'POLY' && ap.vertices) {
-            // Custom polygon from macro outline
             ctx.beginPath();
-            const v = ap.vertices;
-            ctx.moveTo(x + v[0].x, y + v[0].y);
-            for (let i = 1; i < v.length; i++) {
-                ctx.lineTo(x + v[i].x, y + v[i].y);
+            ctx.moveTo(ap.vertices[0].x, ap.vertices[0].y);
+            for (let i = 1; i < ap.vertices.length; i++) {
+                ctx.lineTo(ap.vertices[i].x, ap.vertices[i].y);
             }
             ctx.closePath();
             ctx.fill();
         } else {
             // Fallback
             ctx.beginPath();
-            ctx.arc(x, y, (p[0] || 0.5) / 2, 0, Math.PI * 2);
+            ctx.arc(0, 0, (p[0] || 0.5) / 2, 0, Math.PI * 2);
             ctx.fill();
         }
+        
+        ctx.restore();
     }
     
     updateUI() {
@@ -1135,7 +1161,11 @@ class GerberViewer {
             </div>`).join('') : '<div style="color:var(--text2);text-align:center;padding:16px">Nessun layer</div>';
     }
     
-    toggleLayer(i) { this.layers[i].visible = !this.layers[i].visible; this.updateLayerList(); this.render(); }
+    toggleLayer(i) {
+        this.layers[i].visible = !this.layers[i].visible;
+        this.updateLayerList();
+        this.render();
+    }
     
     removeFile(i) {
         this.files.splice(i, 1);
@@ -1144,13 +1174,21 @@ class GerberViewer {
         this.calcBounds();
         this.updateUI();
         this.updateStats();
-        if (!this.layers.length) { document.getElementById('emptyState').style.display = 'flex'; this.canvas2d.style.display = 'none'; }
-        else this.fit();
+        if (!this.layers.length) {
+            document.getElementById('emptyState').style.display = 'flex';
+            this.canvas2d.style.display = 'none';
+        } else {
+            this.fit();
+        }
     }
     
     clear() {
-        this.files = []; this.layers = []; this.bounds = null; this.boardOutline = null;
-        this.updateUI(); this.updateStats();
+        this.files = [];
+        this.layers = [];
+        this.bounds = null;
+        this.boardOutline = null;
+        this.updateUI();
+        this.updateStats();
         document.getElementById('emptyState').style.display = 'flex';
         this.canvas2d.style.display = 'none';
     }
