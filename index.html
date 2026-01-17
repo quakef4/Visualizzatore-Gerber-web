@@ -443,6 +443,11 @@ class GerberViewer {
             this.canvas2d.style.display = 'none';
             this.canvas3d.style.display = this.layers.length ? 'block' : 'none';
             if (this.layers.length) {
+                // In 3D mode, show all layers by default
+                document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
+                document.querySelector('.view-btn[data-view="all"]').classList.add('active');
+                this.layers.forEach(l => l.visible = true);
+                this.updateLayerList();
                 this.resize3D();
                 this.build3DModel();
             }
@@ -472,11 +477,11 @@ class GerberViewer {
         const centerY = (this.bounds.minY + this.bounds.maxY) / 2;
         const scale = 1;
 
-        // PCB thickness in mm
+        // PCB thickness in mm - increased for better z-buffer separation
         const pcbThickness = 1.6;
-        const copperThickness = 0.035;
-        const maskThickness = 0.02;
-        const silkThickness = 0.01;
+        const copperThickness = 0.07;  // Increased from 0.035
+        const maskThickness = 0.05;    // Increased from 0.02
+        const silkThickness = 0.03;    // Increased from 0.01
 
         // Board outline shape
         let boardShape;
@@ -583,15 +588,18 @@ class GerberViewer {
 
     buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop) {
         const color = new THREE.Color(layer.color);
-        const thickness = layer.type === 'copper' ? 0.035 : (layer.type === 'mask' ? 0.02 : 0.01);
+        const thickness = layer.type === 'copper' ? 0.07 : (layer.type === 'silk' ? 0.03 : 0.05);
 
-        // Create material
+        // Create material with polygonOffset to prevent z-fighting
         const material = new THREE.MeshPhongMaterial({
             color: color,
             shininess: layer.type === 'copper' ? 80 : 30,
             transparent: layer.type === 'mask',
             opacity: layer.type === 'mask' ? 0.85 : 1,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: layer.type === 'copper' ? -1 : (layer.type === 'silk' ? -3 : -2),
+            polygonOffsetUnits: -1
         });
 
         // Process commands
@@ -617,7 +625,10 @@ class GerberViewer {
             shininess: 30,
             transparent: true,
             opacity: 0.85,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: -2,
+            polygonOffsetUnits: -1
         });
 
         try {
@@ -641,7 +652,7 @@ class GerberViewer {
 
         if (ap.type === 'C') {
             const radius = (ap.params[0] || 0.5) / 2 * scale;
-            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 32);
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
             geometry.rotateX(Math.PI / 2);
         } else if (ap.type === 'R') {
             const w = (ap.params[0] || 0.5) * scale;
@@ -652,22 +663,22 @@ class GerberViewer {
             const w = (ap.params[0] || 0.5) * scale;
             const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
             if (Math.abs(w - h) < 0.001) {
-                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 32);
+                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 16);
                 geometry.rotateX(Math.PI / 2);
             } else {
-                // Simplified obround as rounded box
                 geometry = new THREE.BoxGeometry(w, h, thickness);
             }
         } else {
-            // Fallback to circle
             const radius = (ap.params[0] || 0.5) / 2 * scale;
-            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 32);
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
             geometry.rotateX(Math.PI / 2);
         }
 
-        const mesh = new THREE.Mesh(geometry, material.clone());
+        const mesh = new THREE.Mesh(geometry, material);
         mesh.position.set(x, y, zPos);
         if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
         this.pcbGroup.add(mesh);
     }
 
@@ -683,24 +694,14 @@ class GerberViewer {
 
         const angle = Math.atan2(y2 - y1, x2 - x1);
 
-        // Create line as box
-        const geometry = new THREE.BoxGeometry(length, width, thickness);
-        const mesh = new THREE.Mesh(geometry, material.clone());
+        // Create line as box with extended length to avoid gaps (no separate caps)
+        const geometry = new THREE.BoxGeometry(length + width, width, thickness);
+        const mesh = new THREE.Mesh(geometry, material);
         mesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, zPos);
         mesh.rotation.z = angle;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
         this.pcbGroup.add(mesh);
-
-        // Add round caps
-        const capGeom = new THREE.CylinderGeometry(width/2, width/2, thickness, 16);
-        capGeom.rotateX(Math.PI / 2);
-
-        const cap1 = new THREE.Mesh(capGeom, material.clone());
-        cap1.position.set(x1, y1, zPos);
-        this.pcbGroup.add(cap1);
-
-        const cap2 = new THREE.Mesh(capGeom.clone(), material.clone());
-        cap2.position.set(x2, y2, zPos);
-        this.pcbGroup.add(cap2);
     }
 
     addArc3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
@@ -709,21 +710,43 @@ class GerberViewer {
         let prevY = (cmd.y1 - centerY) * scale;
         const width = (cmd.width || 0.1) * scale;
 
-        for (const pt of pts) {
+        // Sample every 4th point for performance
+        const step = Math.max(1, Math.floor(pts.length / 18));
+        for (let i = 0; i < pts.length; i += step) {
+            const pt = pts[Math.min(i, pts.length - 1)];
             const x = (pt.x - centerX) * scale;
             const y = (pt.y - centerY) * scale;
             const length = Math.sqrt((x-prevX)**2 + (y-prevY)**2);
 
             if (length >= 0.001) {
                 const angle = Math.atan2(y - prevY, x - prevX);
-                const geometry = new THREE.BoxGeometry(length, width, thickness);
-                const mesh = new THREE.Mesh(geometry, material.clone());
+                const geometry = new THREE.BoxGeometry(length + width * 0.5, width, thickness);
+                const mesh = new THREE.Mesh(geometry, material);
                 mesh.position.set((prevX + x) / 2, (prevY + y) / 2, zPos);
                 mesh.rotation.z = angle;
+                mesh.matrixAutoUpdate = false;
+                mesh.updateMatrix();
                 this.pcbGroup.add(mesh);
             }
             prevX = x;
             prevY = y;
+        }
+        // Always add final segment
+        if (pts.length > 0) {
+            const lastPt = pts[pts.length - 1];
+            const x = (lastPt.x - centerX) * scale;
+            const y = (lastPt.y - centerY) * scale;
+            const length = Math.sqrt((x-prevX)**2 + (y-prevY)**2);
+            if (length >= 0.001) {
+                const angle = Math.atan2(y - prevY, x - prevX);
+                const geometry = new THREE.BoxGeometry(length + width * 0.5, width, thickness);
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set((prevX + x) / 2, (prevY + y) / 2, zPos);
+                mesh.rotation.z = angle;
+                mesh.matrixAutoUpdate = false;
+                mesh.updateMatrix();
+                this.pcbGroup.add(mesh);
+            }
         }
     }
 
@@ -740,8 +763,10 @@ class GerberViewer {
                 depth: thickness,
                 bevelEnabled: false
             });
-            const mesh = new THREE.Mesh(geometry, material.clone());
+            const mesh = new THREE.Mesh(geometry, material);
             mesh.position.z = zPos - thickness / 2;
+            mesh.matrixAutoUpdate = false;
+            mesh.updateMatrix();
             this.pcbGroup.add(mesh);
         } catch(e) {
             // Skip invalid shapes
@@ -751,12 +776,18 @@ class GerberViewer {
     buildDrillHoles(layer, centerX, centerY, scale, pcbThickness) {
         const holeMaterial = new THREE.MeshPhongMaterial({
             color: 0x0c0c0c,
-            shininess: 5
+            shininess: 5,
+            polygonOffset: true,
+            polygonOffsetFactor: -4,
+            polygonOffsetUnits: -1
         });
 
         const ringMaterial = new THREE.MeshPhongMaterial({
             color: new THREE.Color(this.colors.copper),
-            shininess: 80
+            shininess: 80,
+            polygonOffset: true,
+            polygonOffsetFactor: -5,
+            polygonOffsetUnits: -1
         });
 
         for (const cmd of layer.cmds) {
@@ -765,24 +796,29 @@ class GerberViewer {
                 const y = (cmd.y - centerY) * scale;
                 const radius = (cmd.diameter / 2) * scale;
 
-                // Hole - increased segments for smoother circles
-                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.2, 32);
+                // Hole - optimized segments
+                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.5, 16);
                 holeGeom.rotateX(Math.PI / 2);
-                const holeMesh = new THREE.Mesh(holeGeom, holeMaterial.clone());
+                const holeMesh = new THREE.Mesh(holeGeom, holeMaterial);
                 holeMesh.position.set(x, y, 0);
+                holeMesh.matrixAutoUpdate = false;
+                holeMesh.updateMatrix();
                 this.pcbGroup.add(holeMesh);
 
-                // Copper ring - increased segments for smoother appearance
-                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 16, 32);
-                const ringTop = new THREE.Mesh(ringGeom, ringMaterial.clone());
-                ringTop.position.set(x, y, pcbThickness / 2 + 0.02);
+                // Copper ring - optimized segments
+                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 8, 16);
+                const ringTop = new THREE.Mesh(ringGeom, ringMaterial);
+                ringTop.position.set(x, y, pcbThickness / 2 + 0.08);
+                ringTop.matrixAutoUpdate = false;
+                ringTop.updateMatrix();
                 this.pcbGroup.add(ringTop);
 
-                const ringBottom = new THREE.Mesh(ringGeom.clone(), ringMaterial.clone());
-                ringBottom.position.set(x, y, -pcbThickness / 2 - 0.02);
+                const ringBottom = new THREE.Mesh(ringGeom, ringMaterial);
+                ringBottom.position.set(x, y, -pcbThickness / 2 - 0.08);
+                ringBottom.matrixAutoUpdate = false;
+                ringBottom.updateMatrix();
                 this.pcbGroup.add(ringBottom);
             } else if (cmd.type === 'slot') {
-                // Slot rendering with rounded ends
                 const x1 = (cmd.x1 - centerX) * scale;
                 const y1 = (cmd.y1 - centerY) * scale;
                 const x2 = (cmd.x2 - centerX) * scale;
@@ -791,22 +827,14 @@ class GerberViewer {
                 const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
                 const angle = Math.atan2(y2 - y1, x2 - x1);
 
-                // Slot body
-                const slotGeom = new THREE.BoxGeometry(length, radius * 2, pcbThickness + 0.2);
-                const slotMesh = new THREE.Mesh(slotGeom, holeMaterial.clone());
+                // Slot body with rounded ends (single extended box)
+                const slotGeom = new THREE.BoxGeometry(length + radius * 2, radius * 2, pcbThickness + 0.5);
+                const slotMesh = new THREE.Mesh(slotGeom, holeMaterial);
                 slotMesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, 0);
                 slotMesh.rotation.z = angle;
+                slotMesh.matrixAutoUpdate = false;
+                slotMesh.updateMatrix();
                 this.pcbGroup.add(slotMesh);
-
-                // Rounded ends
-                const endGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.2, 32);
-                endGeom.rotateX(Math.PI / 2);
-                const end1 = new THREE.Mesh(endGeom, holeMaterial.clone());
-                end1.position.set(x1, y1, 0);
-                this.pcbGroup.add(end1);
-                const end2 = new THREE.Mesh(endGeom.clone(), holeMaterial.clone());
-                end2.position.set(x2, y2, 0);
-                this.pcbGroup.add(end2);
             }
         }
     }
