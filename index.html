@@ -380,40 +380,61 @@ class GerberViewer {
         this.pcbGroup = new THREE.Group();
         this.scene.add(this.pcbGroup);
 
-        // Simple orbit controls (manual implementation)
+        // 3D controls with rotation and pan
         this.controls3D = {
             isDragging: false,
+            isPanning: false,
             previousMousePosition: { x: 0, y: 0 },
             rotationSpeed: 0.005,
-            zoomSpeed: 0.1,
-            targetRotation: { x: -Math.PI / 6, y: 0 }
+            panSpeed: 0.5,
+            targetRotation: { x: -Math.PI / 6, y: 0 },
+            targetPan: { x: 0, y: 0 }
         };
 
         this.canvas3d.addEventListener('mousedown', (e) => {
             if (this.viewMode !== '3d') return;
-            this.controls3D.isDragging = true;
+            // Right click or Shift+Left click = pan
+            if (e.button === 2 || e.shiftKey) {
+                this.controls3D.isPanning = true;
+            } else {
+                this.controls3D.isDragging = true;
+            }
             this.controls3D.previousMousePosition = { x: e.clientX, y: e.clientY };
         });
 
         this.canvas3d.addEventListener('mousemove', (e) => {
-            if (this.viewMode !== '3d' || !this.controls3D.isDragging) return;
+            if (this.viewMode !== '3d') return;
             const deltaX = e.clientX - this.controls3D.previousMousePosition.x;
             const deltaY = e.clientY - this.controls3D.previousMousePosition.y;
 
-            this.controls3D.targetRotation.y += deltaX * this.controls3D.rotationSpeed;
-            this.controls3D.targetRotation.x += deltaY * this.controls3D.rotationSpeed;
-            // Allow full 360° rotation
+            if (this.controls3D.isPanning) {
+                // Pan the view
+                this.controls3D.targetPan.x += deltaX * this.controls3D.panSpeed / this.camera.position.z * 10;
+                this.controls3D.targetPan.y -= deltaY * this.controls3D.panSpeed / this.camera.position.z * 10;
+                this.render3D();
+            } else if (this.controls3D.isDragging) {
+                // Rotate the view
+                this.controls3D.targetRotation.y += deltaX * this.controls3D.rotationSpeed;
+                this.controls3D.targetRotation.x += deltaY * this.controls3D.rotationSpeed;
+                this.render3D();
+            }
 
             this.controls3D.previousMousePosition = { x: e.clientX, y: e.clientY };
-            this.render3D();
         });
 
         this.canvas3d.addEventListener('mouseup', () => {
             this.controls3D.isDragging = false;
+            this.controls3D.isPanning = false;
         });
 
         this.canvas3d.addEventListener('mouseleave', () => {
             this.controls3D.isDragging = false;
+            this.controls3D.isPanning = false;
+        });
+
+        // Prevent context menu on right click
+        this.canvas3d.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
         });
 
         this.canvas3d.addEventListener('wheel', (e) => {
@@ -470,6 +491,9 @@ class GerberViewer {
             }
             this.pcbGroup.remove(child);
         }
+
+        // Reset pan position
+        this.controls3D.targetPan = { x: 0, y: 0 };
 
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
@@ -533,7 +557,7 @@ class GerberViewer {
             this.buildLayerGeometry(layer, centerX, centerY, scale, zPos, isTop);
         }
 
-        // Build solder mask as solid surface (only if not copperOnly mode)
+        // Build solder mask (only if not copperOnly mode)
         if (!this.copperOnly) {
             for (const layer of sorted) {
                 if (!layer.visible) continue;
@@ -541,7 +565,13 @@ class GerberViewer {
 
                 const isTop = layer.side === 'top';
                 const zPos = isTop ? pcbThickness/2 + copperThickness + maskThickness/2 : -pcbThickness/2 - copperThickness - maskThickness/2;
+
+                // First render the solid mask surface
                 this.buildSolderMask3D(layer, boardShape, centerX, centerY, scale, zPos, maskThickness);
+
+                // Then render the mask openings (pad exposures) as copper-colored geometry on top
+                const openingZPos = isTop ? pcbThickness/2 + copperThickness + maskThickness + 0.01 : -pcbThickness/2 - copperThickness - maskThickness - 0.01;
+                this.buildMaskOpenings3D(layer, centerX, centerY, scale, openingZPos);
             }
 
             // Build silkscreen layers
@@ -624,7 +654,7 @@ class GerberViewer {
             color: new THREE.Color(layer.color),
             shininess: 30,
             transparent: true,
-            opacity: 0.85,
+            opacity: 0.9,
             side: THREE.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: -2,
@@ -644,6 +674,31 @@ class GerberViewer {
         }
     }
 
+    buildMaskOpenings3D(layer, centerX, centerY, scale, zPos) {
+        // Render mask openings as copper-colored pads (HASL finish appearance)
+        const thickness = 0.02;
+        const material = new THREE.MeshPhongMaterial({
+            color: new THREE.Color(this.colors.copper),
+            shininess: 90,
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: -6,
+            polygonOffsetUnits: -1
+        });
+
+        for (const cmd of layer.cmds) {
+            if (cmd.polarity === 'clear') continue;
+
+            if (cmd.type === 'flash') {
+                this.addFlash3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            } else if (cmd.type === 'line') {
+                this.addLine3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            } else if (cmd.type === 'region' && cmd.points && cmd.points.length >= 3) {
+                this.addRegion3D(cmd, centerX, centerY, scale, zPos, thickness, material);
+            }
+        }
+    }
+
     addFlash3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
         const x = (cmd.x - centerX) * scale;
         const y = (cmd.y - centerY) * scale;
@@ -652,7 +707,7 @@ class GerberViewer {
 
         if (ap.type === 'C') {
             const radius = (ap.params[0] || 0.5) / 2 * scale;
-            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
             geometry.rotateX(Math.PI / 2);
         } else if (ap.type === 'R') {
             const w = (ap.params[0] || 0.5) * scale;
@@ -663,14 +718,14 @@ class GerberViewer {
             const w = (ap.params[0] || 0.5) * scale;
             const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
             if (Math.abs(w - h) < 0.001) {
-                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 16);
+                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 24);
                 geometry.rotateX(Math.PI / 2);
             } else {
                 geometry = new THREE.BoxGeometry(w, h, thickness);
             }
         } else {
             const radius = (ap.params[0] || 0.5) / 2 * scale;
-            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
             geometry.rotateX(Math.PI / 2);
         }
 
@@ -775,7 +830,7 @@ class GerberViewer {
 
     buildDrillHoles(layer, centerX, centerY, scale, pcbThickness) {
         const holeMaterial = new THREE.MeshPhongMaterial({
-            color: 0x0c0c0c,
+            color: 0x1a1a1a,
             shininess: 5,
             polygonOffset: true,
             polygonOffsetFactor: -4,
@@ -796,8 +851,8 @@ class GerberViewer {
                 const y = (cmd.y - centerY) * scale;
                 const radius = (cmd.diameter / 2) * scale;
 
-                // Hole - optimized segments
-                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.5, 16);
+                // Hole - more segments for round appearance
+                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.5, 24);
                 holeGeom.rotateX(Math.PI / 2);
                 const holeMesh = new THREE.Mesh(holeGeom, holeMaterial);
                 holeMesh.position.set(x, y, 0);
@@ -805,8 +860,8 @@ class GerberViewer {
                 holeMesh.updateMatrix();
                 this.pcbGroup.add(holeMesh);
 
-                // Copper ring - optimized segments
-                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 8, 16);
+                // Copper ring - more segments for round appearance
+                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 12, 24);
                 const ringTop = new THREE.Mesh(ringGeom, ringMaterial);
                 ringTop.position.set(x, y, pcbThickness / 2 + 0.08);
                 ringTop.matrixAutoUpdate = false;
@@ -841,6 +896,10 @@ class GerberViewer {
 
     render3D() {
         if (!this.renderer || !this.scene || !this.camera) return;
+
+        // Apply pan
+        this.pcbGroup.position.x = this.controls3D.targetPan.x;
+        this.pcbGroup.position.y = this.controls3D.targetPan.y;
 
         // Update group rotation from controls
         this.pcbGroup.rotation.x = this.controls3D.targetRotation.x;
