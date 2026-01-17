@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerber Viewer Pro v19</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root { --bg:#0c0c0c; --panel:#141414; --surface:#1e1e1e; --border:#2a2a2a; --text:#e0e0e0; --text2:#666; --accent:#22c55e; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:var(--bg); color:var(--text); height:100vh; overflow:hidden; }
+        .app { display:grid; grid-template-columns:300px 1fr; grid-template-rows:50px 1fr; height:100vh; }
+        header { grid-column:1/-1; background:var(--panel); border-bottom:1px solid var(--border); padding:0 20px; display:flex; align-items:center; justify-content:space-between; }
+        .logo { font-weight:700; font-size:1.1rem; display:flex; align-items:center; gap:10px; }
+        .logo-icon { width:32px; height:32px; background:linear-gradient(135deg,var(--accent),#16a34a); border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; color:#000; }
+        .logo span { color:var(--accent); }
+        .header-actions { display:flex; gap:8px; }
+        .btn { padding:8px 16px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:13px; cursor:pointer; transition:all .2s; }
+        .btn:hover { border-color:var(--accent); color:var(--accent); }
+        .sidebar { background:var(--panel); border-right:1px solid var(--border); overflow-y:auto; }
+        .panel { border-bottom:1px solid var(--border); }
+        .panel-header { padding:14px 16px; font-size:11px; font-weight:600; text-transform:uppercase; color:var(--accent); background:rgba(34,197,94,.08); }
+        .panel-body { padding:14px 16px; }
+        .dropzone { border:2px dashed var(--border); border-radius:10px; padding:24px 16px; text-align:center; cursor:pointer; transition:all .2s; }
+        .dropzone:hover,.dropzone.over { border-color:var(--accent); background:rgba(34,197,94,.08); }
+        .dropzone input { display:none; }
+        .dropzone-icon { font-size:36px; margin-bottom:10px; }
+        .dropzone-title { font-size:13px; font-weight:600; margin-bottom:4px; }
+        .dropzone-subtitle { font-size:11px; color:var(--text2); }
+        .file-list { max-height:100px; overflow-y:auto; margin-top:12px; }
+        .file-item { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--surface); border-radius:6px; margin-bottom:4px; font-size:11px; }
+        .file-tag { font-size:9px; padding:3px 6px; border-radius:4px; font-weight:700; }
+        .file-tag.copper { background:#92400e; color:#fef3c7; }
+        .file-tag.mask { background:#15803d; color:#dcfce7; }
+        .file-tag.silk { background:#525252; color:#fff; }
+        .file-tag.drill { background:#1d4ed8; color:#dbeafe; }
+        .file-tag.outline { background:#a16207; color:#fef9c3; }
+        .file-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .file-del { background:none; border:none; color:var(--text2); cursor:pointer; padding:4px 8px; border-radius:4px; }
+        .file-del:hover { background:rgba(239,68,68,.2); color:#ef4444; }
+        .layer-list { max-height:200px; overflow-y:auto; }
+        .layer-item { display:flex; align-items:center; gap:10px; padding:10px 12px; cursor:pointer; border-radius:6px; font-size:12px; }
+        .layer-item:hover { background:rgba(255,255,255,.04); }
+        .layer-toggle { width:36px; height:18px; background:var(--bg); border:1px solid var(--border); border-radius:9px; position:relative; }
+        .layer-toggle::after { content:''; position:absolute; top:2px; left:2px; width:12px; height:12px; background:var(--text2); border-radius:50%; transition:.2s; }
+        .layer-toggle.on { background:var(--accent); border-color:var(--accent); }
+        .layer-toggle.on::after { left:20px; background:#000; }
+        .layer-color { width:16px; height:16px; border-radius:4px; border:1px solid rgba(255,255,255,.2); }
+        .layer-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .layer-actions { display:flex; gap:8px; margin-top:12px; }
+        .layer-actions .btn { flex:1; justify-content:center; padding:8px; font-size:11px; }
+        .view-section { margin-bottom:14px; }
+        .view-label { font-size:10px; color:var(--text2); margin-bottom:8px; text-transform:uppercase; }
+        .view-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+        .view-btn { padding:10px 8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; transition:all .15s; }
+        .view-btn:hover { border-color:var(--text); color:var(--text); }
+        .view-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
+        .copper-toggle { margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+        .copper-btn { width:100%; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; }
+        .copper-btn:hover { border-color:#f59e0b; color:#f59e0b; }
+        .copper-btn.active { background:#b45309; color:#fff; border-color:#b45309; }
+        .color-presets { display:flex; gap:8px; flex-wrap:wrap; }
+        .color-preset { width:40px; height:40px; border-radius:8px; border:2px solid transparent; cursor:pointer; }
+        .color-preset:hover { transform:scale(1.1); }
+        .color-preset.active { border-color:#fff; box-shadow:0 0 0 2px var(--accent); }
+        .preset-green { background:linear-gradient(135deg,#14532d 50%,#b45309 50%); }
+        .preset-blue { background:linear-gradient(135deg,#1e3a8a 50%,#b45309 50%); }
+        .preset-red { background:linear-gradient(135deg,#991b1b 50%,#b45309 50%); }
+        .preset-black { background:linear-gradient(135deg,#171717 50%,#b45309 50%); }
+        .preset-white { background:linear-gradient(135deg,#f5f5f4 50%,#78350f 50%); }
+        .preset-purple { background:linear-gradient(135deg,#581c87 50%,#b45309 50%); }
+        .stats-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .stat-item { background:var(--surface); border-radius:8px; padding:12px; }
+        .stat-label { font-size:10px; color:var(--text2); text-transform:uppercase; margin-bottom:4px; }
+        .stat-value { font-size:15px; font-weight:700; color:var(--accent); }
+        .drill-table { width:100%; font-size:11px; margin-top:12px; }
+        .drill-table th { text-align:left; padding:8px; background:var(--surface); color:var(--text2); }
+        .drill-table td { padding:8px; border-bottom:1px solid var(--border); }
+        main { display:flex; flex-direction:column; background:var(--bg); }
+        .toolbar { display:flex; align-items:center; gap:6px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--border); }
+        .tool-btn { width:34px; height:34px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; }
+        .tool-btn:hover { border-color:var(--accent); color:var(--accent); }
+        .tool-sep { width:1px; height:24px; background:var(--border); margin:0 4px; }
+        .zoom-display { font-size:12px; color:var(--text); min-width:55px; text-align:center; }
+        .canvas-container { flex:1; position:relative; overflow:hidden; }
+        #canvas2d { position:absolute; top:0; left:0; width:100%; height:100%; cursor:grab; }
+        .empty-state { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text2); }
+        .empty-icon { font-size:72px; margin-bottom:20px; opacity:.2; }
+        .empty-title { font-size:20px; margin-bottom:8px; color:var(--text); }
+        .loading { position:absolute; inset:0; background:rgba(0,0,0,.9); display:none; place-items:center; z-index:100; }
+        .loading.show { display:grid; }
+        .spinner { width:44px; height:44px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div class="app">
+    <header>
+        <div class="logo"><div class="logo-icon">◫</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v19</small></div>
+        <div class="header-actions">
+            <button class="btn" id="btnClear">🗑️ Pulisci</button>
+            <button class="btn" id="btnExport">📷 Esporta</button>
+        </div>
+    </header>
+    
+    <aside class="sidebar">
+        <div class="panel">
+            <div class="panel-header">📁 File Gerber</div>
+            <div class="panel-body">
+                <div class="dropzone" id="dropzone">
+                    <div class="dropzone-icon">📂</div>
+                    <div class="dropzone-title">Trascina file o clicca</div>
+                    <div class="dropzone-subtitle">Gerber, Excellon, ZIP</div>
+                    <input type="file" id="fileInput" multiple>
+                </div>
+                <div class="file-list" id="fileList"></div>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-header">🗂️ Layer (<span id="layerCount">0</span>)</div>
+            <div class="panel-body">
+                <div class="layer-list" id="layerList"></div>
+                <div class="layer-actions">
+                    <button class="btn" id="btnShowAll">👁 Tutti</button>
+                    <button class="btn" id="btnHideAll">👁‍🗨 Nessuno</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-header">👁 Vista</div>
+            <div class="panel-body">
+                <div class="view-section">
+                    <div class="view-label">Lato</div>
+                    <div class="view-grid">
+                        <button class="view-btn active" data-view="top">Top</button>
+                        <button class="view-btn" data-view="bottom">Bottom</button>
+                        <button class="view-btn" data-view="all">Tutti</button>
+                    </div>
+                </div>
+                <div class="view-section">
+                    <div class="view-label">Rotazione</div>
+                    <div class="view-grid">
+                        <button class="view-btn" data-rot="0">0°</button>
+                        <button class="view-btn" data-rot="90">90°</button>
+                        <button class="view-btn" data-rot="180">180°</button>
+                    </div>
+                </div>
+                <div class="copper-toggle">
+                    <button class="copper-btn" id="btnCopperOnly">🔶 Solo Rame</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-header">🎨 Colori PCB</div>
+            <div class="panel-body">
+                <div class="color-presets">
+                    <div class="color-preset preset-green active" data-mask="#14532d" data-silk="#f5f5f4" title="Verde"></div>
+                    <div class="color-preset preset-blue" data-mask="#1e3a8a" data-silk="#f5f5f4" title="Blu"></div>
+                    <div class="color-preset preset-red" data-mask="#991b1b" data-silk="#f5f5f4" title="Rosso"></div>
+                    <div class="color-preset preset-black" data-mask="#171717" data-silk="#f5f5f4" title="Nero"></div>
+                    <div class="color-preset preset-white" data-mask="#f5f5f4" data-silk="#171717" title="Bianco"></div>
+                    <div class="color-preset preset-purple" data-mask="#581c87" data-silk="#f5f5f4" title="Viola"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-header">📊 Statistiche</div>
+            <div class="panel-body">
+                <div class="stats-grid">
+                    <div class="stat-item"><div class="stat-label">Dimensione</div><div class="stat-value" id="statSize">-</div></div>
+                    <div class="stat-item"><div class="stat-label">Fori</div><div class="stat-value" id="statHoles">-</div></div>
+                </div>
+                <table class="drill-table" id="drillTable" style="display:none">
+                    <thead><tr><th>Tool</th><th>Ø mm</th><th>Qty</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </aside>
+    
+    <main>
+        <div class="toolbar">
+            <button class="tool-btn" id="btnZoomIn" title="Zoom +">+</button>
+            <button class="tool-btn" id="btnZoomOut" title="Zoom -">−</button>
+            <button class="tool-btn" id="btnFit" title="Adatta">⊡</button>
+            <span class="zoom-display" id="zoomDisplay">100%</span>
+            <div class="tool-sep"></div>
+            <button class="tool-btn" id="btnFlipH" title="Specchia H">↔</button>
+            <button class="tool-btn" id="btnFlipV" title="Specchia V">↕</button>
+        </div>
+        <div class="canvas-container" id="canvasContainer">
+            <canvas id="canvas2d" style="display:none"></canvas>
+            <div class="empty-state" id="emptyState">
+                <div class="empty-icon">◫</div>
+                <div class="empty-title">Carica file Gerber</div>
+                <div>Trascina file o usa il pannello laterale</div>
+            </div>
+            <div class="loading" id="loading"><div class="spinner"></div></div>
+        </div>
+    </main>
+</div>
+
+<script>
+class GerberViewer {
+    constructor() {
+        this.canvas2d = document.getElementById('canvas2d');
+        this.ctx = this.canvas2d.getContext('2d');
+        this.files = [];
+        this.layers = [];
+        this.bounds = null;
+        this.boardOutline = null;
+        this.zoom = 1;
+        this.pan = {x:0, y:0};
+        this.ppm = 10;
+        this.rotation = 0;
+        this.flipH = false;
+        this.flipV = false;
+        this.colors = { bg:'#0c0c0c', mask:'#14532d', silk:'#f5f5f4', copper:'#b45309' };
+        this.copperOnly = false;
+        
+        this.setupEvents();
+    }
+    
+    setupEvents() {
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        
+        dropzone.onclick = () => fileInput.click();
+        dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('over'); };
+        dropzone.ondragleave = () => dropzone.classList.remove('over');
+        dropzone.ondrop = e => { e.preventDefault(); dropzone.classList.remove('over'); this.loadFiles(e.dataTransfer.files); };
+        fileInput.onchange = () => this.loadFiles(fileInput.files);
+        
+        document.getElementById('btnClear').onclick = () => this.clear();
+        document.getElementById('btnExport').onclick = () => this.exportPng();
+        document.getElementById('btnShowAll').onclick = () => this.setAllLayersVisible(true);
+        document.getElementById('btnHideAll').onclick = () => this.setAllLayersVisible(false);
+        document.getElementById('btnZoomIn').onclick = () => this.setZoom(this.zoom*1.3);
+        document.getElementById('btnZoomOut').onclick = () => this.setZoom(this.zoom/1.3);
+        document.getElementById('btnFit').onclick = () => this.fit();
+        document.getElementById('btnFlipH').onclick = () => { this.flipH=!this.flipH; this.render(); };
+        document.getElementById('btnFlipV').onclick = () => { this.flipV=!this.flipV; this.render(); };
+        
+        document.getElementById('btnCopperOnly').onclick = () => {
+            this.copperOnly = !this.copperOnly;
+            document.getElementById('btnCopperOnly').classList.toggle('active', this.copperOnly);
+            this.render();
+        };
+        
+        document.querySelectorAll('.view-btn[data-view]').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.setView(btn.dataset.view);
+            };
+        });
+        
+        document.querySelectorAll('.view-btn[data-rot]').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.view-btn[data-rot]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.rotation = parseInt(btn.dataset.rot);
+                this.render();
+            };
+        });
+        
+        document.querySelectorAll('.color-preset').forEach(preset => {
+            preset.onclick = () => {
+                document.querySelectorAll('.color-preset').forEach(p => p.classList.remove('active'));
+                preset.classList.add('active');
+                this.colors.mask = preset.dataset.mask;
+                this.colors.silk = preset.dataset.silk;
+                this.layers.forEach(l => {
+                    if (l.type==='mask') l.color = this.colors.mask;
+                    if (l.type==='silk') l.color = this.colors.silk;
+                });
+                this.updateLayerList();
+                this.render();
+            };
+        });
+        
+        const container = document.getElementById('canvasContainer');
+        container.onwheel = e => { e.preventDefault(); this.setZoom(this.zoom * (e.deltaY < 0 ? 1.15 : 0.87)); };
+        container.onmousedown = e => { this.drag = true; this.lastMouse = {x:e.clientX, y:e.clientY}; this.canvas2d.style.cursor = 'grabbing'; };
+        container.onmousemove = e => {
+            if (!this.drag) return;
+            this.pan.x += e.clientX - this.lastMouse.x;
+            this.pan.y += e.clientY - this.lastMouse.y;
+            this.render();
+            this.lastMouse = {x:e.clientX, y:e.clientY};
+        };
+        container.onmouseup = container.onmouseleave = () => { this.drag = false; this.canvas2d.style.cursor = 'grab'; };
+        window.onresize = () => { if (this.layers.length) this.fit(); };
+    }
+    
+    setView(view) {
+        this.layers.forEach(l => {
+            if (view === 'all') l.visible = true;
+            else if (view === 'top') l.visible = l.side === 'top' || l.side === 'both';
+            else if (view === 'bottom') l.visible = l.side === 'bottom' || l.side === 'both';
+        });
+        this.updateLayerList();
+        this.render();
+    }
+    
+    async loadFiles(fileList) {
+        document.getElementById('loading').classList.add('show');
+        const files = [];
+        for (const f of fileList) {
+            if (f.name.toLowerCase().endsWith('.zip')) files.push(...await this.extractZip(f));
+            else files.push(f);
+        }
+        for (const f of files) {
+            try {
+                const layer = this.parseFile(f.name, await f.text());
+                if (layer?.cmds.length > 0) { this.files.push(f); this.layers.push(layer); }
+            } catch(e) { console.error('Parse error:', f.name, e); }
+        }
+        this.extractBoardOutline();
+        this.calcBounds();
+        this.updateUI();
+        this.updateStats();
+        if (this.layers.length > 0) {
+            document.getElementById('emptyState').style.display = 'none';
+            this.canvas2d.style.display = 'block';
+            this.fit();
+        }
+        document.getElementById('loading').classList.remove('show');
+    }
+    
+    async extractZip(zipFile) {
+        const zip = await JSZip.loadAsync(zipFile);
+        const files = [];
+        const ext = ['gtl','gbl','gts','gbs','gto','gbo','drl','xln','gko','gm1','gbr','ger','gtp','gbp','txt'];
+        for (const [name, entry] of Object.entries(zip.files)) {
+            if (!entry.dir && ext.includes(name.split('.').pop().toLowerCase())) {
+                files.push(new File([await entry.async('string')], name.split('/').pop()));
+            }
+        }
+        return files;
+    }
+    
+    detectLayerType(name, ext) {
+        const n = name.toLowerCase();
+        if (n.includes('toplayer') || n.includes('top_copper') || n.includes('-f_cu') || ext==='gtl') return {type:'copper',side:'top',order:10};
+        if (n.includes('bottomlayer') || n.includes('bottom_copper') || n.includes('-b_cu') || ext==='gbl') return {type:'copper',side:'bottom',order:11};
+        if (n.includes('topsoldermask') || n.includes('top_mask') || n.includes('-f_mask') || ext==='gts') return {type:'mask',side:'top',order:20};
+        if (n.includes('bottomsoldermask') || n.includes('bottom_mask') || n.includes('-b_mask') || ext==='gbs') return {type:'mask',side:'bottom',order:21};
+        if (n.includes('topsilk') || n.includes('top_silk') || n.includes('-f_silks') || ext==='gto') return {type:'silk',side:'top',order:30};
+        if (n.includes('bottomsilk') || n.includes('bottom_silk') || n.includes('-b_silks') || ext==='gbo') return {type:'silk',side:'bottom',order:31};
+        if (n.includes('outline') || n.includes('edge') || n.includes('boardoutline') || ext==='gko' || ext==='gm1') return {type:'outline',side:'both',order:0};
+        if (n.includes('drill') || ext==='drl' || ext==='xln' || (ext==='txt' && n.includes('drill'))) return {type:'drill',side:'both',order:50};
+        return {type:'unknown',side:'both',order:100};
+    }
+    
+    getLayerColor(type) {
+        return {copper:this.colors.copper, mask:this.colors.mask, silk:this.colors.silk, outline:'#facc15'}[type] || '#666';
+    }
+    
+    parseFile(name, text) {
+        const ext = name.toLowerCase().split('.').pop();
+        const info = this.detectLayerType(name, ext);
+        info.color = this.getLayerColor(info.type);
+        
+        // Check if it's a drill file by content
+        const isDrill = (ext==='drl' || ext==='xln' || text.includes('M48') || text.includes('T01C') || text.includes('T1C'));
+        
+        return isDrill ? this.parseDrill(name, text, info) : this.parseGerber(name, text, info);
+    }
+    
+    parseGerber(name, text, info) {
+        let xInt=2, xDec=4, unit='mm';
+        const apertures = {};
+        let curAp=null, x=0, y=0, interp='linear', polarity='dark', inRegion=false, regionPts=[];
+        const cmds = [];
+        
+        const parseCoord = (s, intD, decD) => {
+            if (!s) return null;
+            let neg = s.startsWith('-');
+            if (neg) s = s.slice(1);
+            s = s.padStart(intD + decD, '0');
+            let v = parseFloat(s.slice(0, -decD) + '.' + s.slice(-decD));
+            return (neg ? -v : v) * (unit==='in' ? 25.4 : 1);
+        };
+        
+        const lines = text.split(/\r?\n/);
+        for (const line of lines) {
+            const l = line.trim();
+            if (!l || l.startsWith('G04')) continue;
+            
+            // Format specification
+            let m = l.match(/%FSLAX(\d)(\d)Y(\d)(\d)\*%/);
+            if (m) { xInt=+m[1]; xDec=+m[2]; continue; }
+            if (l.includes('%MOMM')) { unit='mm'; continue; }
+            if (l.includes('%MOIN')) { unit='in'; continue; }
+            
+            // Aperture definition
+            m = l.match(/%ADD(\d+)([CROP]),?([^*]*)\*%/);
+            if (m) {
+                apertures[m[1]] = {type:m[2], params:m[3] ? m[3].split('X').map(Number) : [0]};
+                continue;
+            }
+            
+            // Aperture macro definition (simplified - treat as rectangle or circle)
+            m = l.match(/%ADD(\d+)([A-Za-z_][A-Za-z0-9_]*),?([^*]*)\*%/);
+            if (m && !['C','R','O','P'].includes(m[2])) {
+                // Macro aperture - try to parse params
+                const params = m[3] ? m[3].split('X').map(Number) : [0.5];
+                // Default to rectangle if 2 params, else circle
+                if (params.length >= 2) {
+                    apertures[m[1]] = {type:'R', params:[params[0], params[1]]};
+                } else {
+                    apertures[m[1]] = {type:'C', params:[params[0] || 0.5]};
+                }
+                continue;
+            }
+            
+            if (l.includes('%LPD')) { polarity='dark'; continue; }
+            if (l.includes('%LPC')) { polarity='clear'; continue; }
+            
+            for (const cmd of l.split('*').filter(c => c.trim())) {
+                const c = cmd.trim();
+                
+                if (c === 'G01' || c === 'G1') { interp = 'linear'; continue; }
+                if (c === 'G02' || c === 'G2') { interp = 'cw'; continue; }
+                if (c === 'G03' || c === 'G3') { interp = 'ccw'; continue; }
+                if (c === 'G74' || c === 'G75') continue;
+                if (c === 'G36') { inRegion = true; regionPts = []; continue; }
+                if (c === 'G37') {
+                    if (regionPts.length >= 3) {
+                        const f = regionPts[0], last = regionPts[regionPts.length-1];
+                        if (Math.abs(f.x-last.x) > 0.001 || Math.abs(f.y-last.y) > 0.001) regionPts.push({x:f.x,y:f.y});
+                        cmds.push({type:'region', points:[...regionPts], polarity});
+                    }
+                    inRegion = false; continue;
+                }
+                
+                m = c.match(/^D(\d+)$/);
+                if (m && +m[1] >= 10) { curAp = m[1]; continue; }
+                
+                m = c.match(/^(?:G0?([123]))?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?(?:D0?([123]))?$/);
+                if (m && (m[2] || m[3] || m[6])) {
+                    if (m[1]) {
+                        if (m[1]==='1') interp = 'linear';
+                        else if (m[1]==='2') interp = 'cw';
+                        else if (m[1]==='3') interp = 'ccw';
+                    }
+                    
+                    const ox=x, oy=y;
+                    if (m[2]) x = parseCoord(m[2], xInt, xDec);
+                    if (m[3]) y = parseCoord(m[3], xInt, xDec);
+                    const i = m[4] ? parseCoord(m[4], xInt, xDec) : 0;
+                    const j = m[5] ? parseCoord(m[5], xInt, xDec) : 0;
+                    const d = m[6] ? +m[6] : null;
+                    
+                    if (inRegion) {
+                        if (d === 2) {
+                            if (regionPts.length >= 3) cmds.push({type:'region', points:[...regionPts], polarity});
+                            regionPts = [{x,y}];
+                        } else if (d === 1 || d === null) {
+                            if (!regionPts.length) regionPts.push({x:ox,y:oy});
+                            if (interp === 'linear') regionPts.push({x,y});
+                            else regionPts.push(...this.arcToPoints(ox,oy,x,y,i,j,interp==='cw'));
+                        }
+                    } else {
+                        if (d === 1) {
+                            const ap = apertures[curAp] || {type:'C',params:[0.1]};
+                            if (interp === 'linear') {
+                                cmds.push({type:'line',x1:ox,y1:oy,x2:x,y2:y,width:ap.params[0]||0.1,polarity});
+                            } else {
+                                cmds.push({type:'arc',x1:ox,y1:oy,x2:x,y2:y,i,j,cw:interp==='cw',width:ap.params[0]||0.1,polarity});
+                            }
+                        } else if (d === 3) {
+                            cmds.push({type:'flash',x,y,aperture:apertures[curAp]||{type:'C',params:[0.5]},polarity});
+                        }
+                    }
+                }
+            }
+        }
+        return {name, ...info, cmds, visible:true};
+    }
+    
+    arcToPoints(x1,y1,x2,y2,i,j,cw) {
+        const cx=x1+i, cy=y1+j, r=Math.sqrt(i*i+j*j);
+        if (r < 0.0001) return [{x:x2,y:y2}];
+        let a1 = Math.atan2(y1-cy, x1-cx), a2 = Math.atan2(y2-cy, x2-cx);
+        if (Math.abs(x1-x2)<0.01 && Math.abs(y1-y2)<0.01) a2 = cw ? a1-Math.PI*2 : a1+Math.PI*2;
+        else { if (cw && a2>=a1) a2-=Math.PI*2; if (!cw && a2<=a1) a2+=Math.PI*2; }
+        const pts=[], steps=Math.max(72, Math.ceil(Math.abs(a2-a1)*r/0.1));
+        for (let n=1; n<=steps; n++) { const a=a1+(a2-a1)*n/steps; pts.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a)}); }
+        return pts;
+    }
+    
+    parseDrill(name, text, info) {
+        const tools = {};
+        let curTool = null;
+        let unit = 'mm';
+        let format = {int: 2, dec: 4}; // Default format 2.4
+        const cmds = [];
+        
+        // First pass: detect format and unit
+        const lines = text.split(/\r?\n/);
+        let inHeader = true;
+        
+        for (const line of lines) {
+            const l = line.trim().toUpperCase();
+            if (!l || l.startsWith(';')) continue;
+            
+            // End of header
+            if (l === '%' || l === 'M95') { inHeader = false; continue; }
+            if (l === 'M30' || l === 'M00') break;
+            
+            // Unit detection
+            if (l.includes('METRIC')) {
+                unit = 'mm';
+                // Check for format in same line: METRIC,TZ or METRIC,LZ
+                if (l.includes(',TZ') || l.includes(',0000.00')) format = {int: 4, dec: 2};
+                else if (l.includes(',LZ') || l.includes(',000.000')) format = {int: 3, dec: 3};
+                else format = {int: 3, dec: 3}; // Default metric format
+            }
+            if (l.includes('INCH')) {
+                unit = 'in';
+                if (l.includes(',TZ') || l.includes(',00.0000')) format = {int: 2, dec: 4};
+                else if (l.includes(',LZ')) format = {int: 2, dec: 4};
+                else format = {int: 2, dec: 4}; // Default inch format
+            }
+            
+            // Format specification: FMAT,2 or ICI,ON etc
+            if (l.match(/FMAT,?2/)) format = {int: 2, dec: 4};
+            
+            // Tool definition: T01C0.8 or T1C0.80
+            let m = l.match(/T(\d+)C([\d.]+)/);
+            if (m) {
+                let dia = parseFloat(m[2]);
+                // Tool diameter is always in the file's unit
+                if (unit === 'in') dia *= 25.4;
+                tools[m[1]] = dia;
+                tools[m[1].replace(/^0+/, '')] = dia; // Also store without leading zeros
+                continue;
+            }
+            
+            // Tool selection: T01 or T1
+            m = l.match(/^T(\d+)$/);
+            if (m) {
+                curTool = m[1];
+                // Try without leading zeros too
+                if (!tools[curTool]) curTool = curTool.replace(/^0+/, '');
+                continue;
+            }
+            
+            // Skip header lines
+            if (inHeader) continue;
+            
+            // Coordinate parsing
+            // Formats: X123Y456 or X1.23Y4.56 or X+123Y-456
+            m = line.match(/X([+-]?[\d.]+)Y([+-]?[\d.]+)/i);
+            if (m && curTool) {
+                let dx, dy;
+                const xStr = m[1], yStr = m[2];
+                
+                if (xStr.includes('.')) {
+                    // Explicit decimal point
+                    dx = parseFloat(xStr);
+                    dy = parseFloat(yStr);
+                } else {
+                    // No decimal point - apply format
+                    // Parse as integer then apply decimal places
+                    const xVal = parseInt(xStr, 10);
+                    const yVal = parseInt(yStr, 10);
+                    const divisor = Math.pow(10, format.dec);
+                    dx = xVal / divisor;
+                    dy = yVal / divisor;
+                }
+                
+                // Convert to mm if needed
+                if (unit === 'in') {
+                    dx *= 25.4;
+                    dy *= 25.4;
+                }
+                
+                const dia = tools[curTool] || 0.8;
+                cmds.push({type: 'drill', x: dx, y: dy, diameter: dia});
+            }
+            
+            // Slot: X...Y...G85X...Y...
+            m = line.match(/X([+-]?[\d.]+)Y([+-]?[\d.]+)G85X([+-]?[\d.]+)Y([+-]?[\d.]+)/i);
+            if (m && curTool) {
+                let x1, y1, x2, y2;
+                
+                if (m[1].includes('.')) {
+                    x1 = parseFloat(m[1]);
+                    y1 = parseFloat(m[2]);
+                    x2 = parseFloat(m[3]);
+                    y2 = parseFloat(m[4]);
+                } else {
+                    const divisor = Math.pow(10, format.dec);
+                    x1 = parseInt(m[1], 10) / divisor;
+                    y1 = parseInt(m[2], 10) / divisor;
+                    x2 = parseInt(m[3], 10) / divisor;
+                    y2 = parseInt(m[4], 10) / divisor;
+                }
+                
+                if (unit === 'in') {
+                    x1 *= 25.4; y1 *= 25.4;
+                    x2 *= 25.4; y2 *= 25.4;
+                }
+                
+                const dia = tools[curTool] || 0.8;
+                cmds.push({type: 'slot', x1, y1, x2, y2, diameter: dia});
+            }
+        }
+        
+        console.log('Drill parsed:', name, 'Unit:', unit, 'Format:', format, 'Tools:', tools, 'Holes:', cmds.length);
+        return {name, ...info, cmds, visible: true};
+    }
+    
+    extractBoardOutline() {
+        const ol = this.layers.find(l => l.type === 'outline');
+        if (!ol) { this.boardOutline = null; return; }
+        
+        const segments = [];
+        for (const cmd of ol.cmds) {
+            if (cmd.type === 'line') {
+                segments.push({ type:'line', x1:cmd.x1, y1:cmd.y1, x2:cmd.x2, y2:cmd.y2, used:false });
+            } else if (cmd.type === 'arc') {
+                const arcPts = this.arcToPoints(cmd.x1,cmd.y1,cmd.x2,cmd.y2,cmd.i,cmd.j,cmd.cw);
+                segments.push({ type:'arc', x1:cmd.x1, y1:cmd.y1, x2:cmd.x2, y2:cmd.y2, arcPts, used:false });
+            } else if (cmd.type === 'region' && cmd.points.length >= 3) {
+                for (let i = 0; i < cmd.points.length - 1; i++) {
+                    segments.push({ type:'line', x1:cmd.points[i].x, y1:cmd.points[i].y, x2:cmd.points[i+1].x, y2:cmd.points[i+1].y, used:false });
+                }
+            }
+        }
+        
+        if (!segments.length) { this.boardOutline = null; return; }
+        
+        const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+        
+        let current = segments[0];
+        current.used = true;
+        
+        const path = [{x: current.x1, y: current.y1}];
+        if (current.type === 'arc' && current.arcPts) path.push(...current.arcPts);
+        else path.push({x: current.x2, y: current.y2});
+        
+        let endX = current.x2, endY = current.y2;
+        const MAX_GAP = 2.0;
+        
+        for (let iter = 0; iter < segments.length * 2; iter++) {
+            let bestSeg = null, bestDist = Infinity, bestReversed = false;
+            
+            for (const seg of segments) {
+                if (seg.used) continue;
+                const d1 = dist(endX, endY, seg.x1, seg.y1);
+                const d2 = dist(endX, endY, seg.x2, seg.y2);
+                if (d1 < bestDist) { bestDist = d1; bestSeg = seg; bestReversed = false; }
+                if (d2 < bestDist) { bestDist = d2; bestSeg = seg; bestReversed = true; }
+            }
+            
+            if (!bestSeg || bestDist > MAX_GAP) break;
+            bestSeg.used = true;
+            
+            if (bestDist > 0.01) {
+                path.push({x: bestReversed ? bestSeg.x2 : bestSeg.x1, y: bestReversed ? bestSeg.y2 : bestSeg.y1});
+            }
+            
+            if (bestSeg.type === 'arc' && bestSeg.arcPts) {
+                const pts = bestReversed ? [...bestSeg.arcPts].reverse() : bestSeg.arcPts;
+                path.push(...pts);
+            } else {
+                path.push({x: bestReversed ? bestSeg.x1 : bestSeg.x2, y: bestReversed ? bestSeg.y1 : bestSeg.y2});
+            }
+            
+            endX = bestReversed ? bestSeg.x1 : bestSeg.x2;
+            endY = bestReversed ? bestSeg.y1 : bestSeg.y2;
+        }
+        
+        this.boardOutline = path;
+    }
+    
+    calcBounds() {
+        let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+        for (const l of this.layers) {
+            for (const c of l.cmds) {
+                const pts = c.points || (c.x!==undefined ? [{x:c.x,y:c.y}] : [{x:c.x1,y:c.y1},{x:c.x2,y:c.y2}]);
+                for (const p of pts) {
+                    if (p.x < minX) minX = p.x;
+                    if (p.y < minY) minY = p.y;
+                    if (p.x > maxX) maxX = p.x;
+                    if (p.y > maxY) maxY = p.y;
+                }
+            }
+        }
+        if (minX !== Infinity) this.bounds = {minX, minY, maxX, maxY};
+    }
+    
+    updateStats() {
+        if (!this.bounds) { document.getElementById('statSize').textContent = '-'; document.getElementById('statHoles').textContent = '-'; return; }
+        const w = (this.bounds.maxX - this.bounds.minX).toFixed(1);
+        const h = (this.bounds.maxY - this.bounds.minY).toFixed(1);
+        document.getElementById('statSize').textContent = `${w} × ${h} mm`;
+        
+        const drillLayer = this.layers.find(l => l.type === 'drill');
+        if (drillLayer) {
+            const drills = drillLayer.cmds.filter(c => c.type === 'drill');
+            const slots = drillLayer.cmds.filter(c => c.type === 'slot');
+            document.getElementById('statHoles').textContent = drills.length + (slots.length ? ` + ${slots.length} slot` : '');
+            
+            const toolStats = {};
+            for (const c of drills) {
+                const d = c.diameter.toFixed(2);
+                toolStats[d] = (toolStats[d] || 0) + 1;
+            }
+            const tbody = document.querySelector('#drillTable tbody');
+            tbody.innerHTML = Object.entries(toolStats).sort((a,b) => parseFloat(a[0]) - parseFloat(b[0]))
+                .map(([d, n], i) => `<tr><td>T${i+1}</td><td>${d}</td><td>${n}</td></tr>`).join('');
+            document.getElementById('drillTable').style.display = Object.keys(toolStats).length ? '' : 'none';
+        } else {
+            document.getElementById('statHoles').textContent = '-';
+            document.getElementById('drillTable').style.display = 'none';
+        }
+    }
+    
+    fit() {
+        if (!this.bounds) return;
+        const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+        this.canvas2d.width = rect.width; this.canvas2d.height = rect.height;
+        
+        const bw = this.bounds.maxX - this.bounds.minX, bh = this.bounds.maxY - this.bounds.minY;
+        const sw = (rect.width - 80) / bw, sh = (rect.height - 80) / bh;
+        this.ppm = Math.min(sw, sh);
+        this.zoom = 1;
+        this.pan = { x: (rect.width - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
+        this.updateZoomDisplay();
+        this.render();
+    }
+    
+    setZoom(z) {
+        const old = this.zoom;
+        this.zoom = Math.max(0.05, Math.min(50, z));
+        const cx = this.canvas2d.width/2, cy = this.canvas2d.height/2, s = this.zoom/old;
+        this.pan.x = cx - (cx - this.pan.x) * s;
+        this.pan.y = cy - (cy - this.pan.y) * s;
+        this.updateZoomDisplay();
+        this.render();
+    }
+    
+    updateZoomDisplay() { document.getElementById('zoomDisplay').textContent = Math.round(this.zoom*100)+'%'; }
+    setAllLayersVisible(v) { this.layers.forEach(l=>l.visible=v); this.updateLayerList(); this.render(); }
+    
+    render() {
+        if (!this.bounds || !this.layers.length) return;
+        
+        const ctx = this.ctx, scale = this.ppm * this.zoom;
+        const bw = this.bounds.maxX - this.bounds.minX, bh = this.bounds.maxY - this.bounds.minY;
+        
+        ctx.fillStyle = this.colors.bg;
+        ctx.fillRect(0, 0, this.canvas2d.width, this.canvas2d.height);
+        
+        ctx.save();
+        ctx.translate(this.pan.x, this.pan.y);
+        ctx.scale(scale, scale);
+        
+        const cx = bw/2, cy = bh/2;
+        ctx.translate(cx, cy);
+        if (this.rotation) ctx.rotate(this.rotation * Math.PI / 180);
+        if (this.flipH) ctx.scale(-1, 1);
+        if (this.flipV) ctx.scale(1, -1);
+        ctx.translate(-cx, -cy);
+        ctx.translate(-this.bounds.minX, -this.bounds.minY);
+        
+        // Clip to board and draw FR4
+        if (this.boardOutline?.length >= 3) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
+            for (let i = 1; i < this.boardOutline.length; i++) ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            ctx.closePath();
+            ctx.clip();
+            ctx.fillStyle = '#c19a6b';
+            ctx.fill();
+        }
+        
+        const sorted = [...this.layers].sort((a, b) => a.order - b.order);
+        
+        if (this.copperOnly) {
+            for (const l of sorted) if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+        } else {
+            // 1. Copper
+            for (const l of sorted) if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+            
+            // 2. Solder mask
+            for (const l of sorted) {
+                if (l.visible && l.type === 'mask') {
+                    ctx.globalAlpha = 0.78;
+                    this.renderSolderMask(l, ctx);
+                    ctx.globalAlpha = 1;
+                }
+            }
+            
+            // 3. Silkscreen
+            for (const l of sorted) if (l.visible && l.type === 'silk') this.renderLayer(l, ctx);
+        }
+        
+        // 4. Drills
+        for (const l of sorted) if (l.visible && l.type === 'drill') this.renderDrillLayer(l, ctx);
+        
+        if (this.boardOutline) ctx.restore();
+        
+        // Outline stroke
+        const ol = this.layers.find(l => l.type === 'outline');
+        if (ol?.visible && this.boardOutline) {
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 0.15;
+            ctx.beginPath();
+            ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
+            for (let i = 1; i < this.boardOutline.length; i++) ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            ctx.closePath();
+            ctx.stroke();
+        }
+        
+        ctx.restore();
+    }
+    
+    renderSolderMask(layer, ctx) {
+        // Solder mask rendering:
+        // The solder mask Gerber shows where pads are EXPOSED (no solder mask)
+        // So we fill with mask color, then cut out ALL the drawn features
+        
+        ctx.save();
+        
+        // Fill board with mask
+        if (this.boardOutline?.length >= 3) {
+            ctx.fillStyle = layer.color;
+            ctx.beginPath();
+            ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
+            for (let i = 1; i < this.boardOutline.length; i++) ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            ctx.closePath();
+            ctx.fill();
+        }
+        
+        // Cut out all features (these are the pad openings)
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = '#000';
+        ctx.strokeStyle = '#000';
+        
+        for (const cmd of layer.cmds) {
+            // In solder mask, features with "dark" polarity are openings (exposed copper)
+            // Features with "clear" polarity would add mask back (rare)
+            if (cmd.polarity === 'clear') continue;
+            
+            if (cmd.type === 'region' && cmd.points.length >= 3) {
+                ctx.beginPath();
+                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                for (let i = 1; i < cmd.points.length; i++) ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                ctx.closePath();
+                ctx.fill();
+            } else if (cmd.type === 'line') {
+                ctx.lineWidth = cmd.width || 0.1;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                ctx.lineTo(cmd.x2, cmd.y2);
+                ctx.stroke();
+            } else if (cmd.type === 'arc') {
+                ctx.lineWidth = cmd.width || 0.1;
+                ctx.lineCap = 'round';
+                const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                for (const p of pts) ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+            } else if (cmd.type === 'flash') {
+                this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
+            }
+        }
+        
+        ctx.restore();
+    }
+    
+    renderLayer(layer, ctx) {
+        for (const cmd of layer.cmds) {
+            ctx.fillStyle = layer.color;
+            ctx.strokeStyle = layer.color;
+            ctx.globalCompositeOperation = cmd.polarity === 'clear' ? 'destination-out' : 'source-over';
+            
+            if (cmd.type === 'region' && cmd.points.length >= 3) {
+                ctx.beginPath();
+                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                for (let i = 1; i < cmd.points.length; i++) ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                ctx.closePath();
+                ctx.fill();
+            } else if (cmd.type === 'line') {
+                ctx.lineWidth = cmd.width || 0.1;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                ctx.lineTo(cmd.x2, cmd.y2);
+                ctx.stroke();
+            } else if (cmd.type === 'arc') {
+                ctx.lineWidth = cmd.width || 0.1;
+                ctx.lineCap = 'round';
+                const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                for (const p of pts) ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+            } else if (cmd.type === 'flash') {
+                this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
+            }
+        }
+        ctx.globalCompositeOperation = 'source-over';
+    }
+    
+    renderDrillLayer(layer, ctx) {
+        for (const cmd of layer.cmds) {
+            if (cmd.type === 'drill') {
+                // Hole
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.fillStyle = this.colors.bg;
+                ctx.beginPath();
+                ctx.arc(cmd.x, cmd.y, cmd.diameter / 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Annular ring
+                ctx.strokeStyle = this.colors.copper;
+                ctx.lineWidth = 0.15;
+                ctx.beginPath();
+                ctx.arc(cmd.x, cmd.y, cmd.diameter / 2 + 0.15, 0, Math.PI * 2);
+                ctx.stroke();
+            } else if (cmd.type === 'slot') {
+                // Slot outline (copper)
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.strokeStyle = this.colors.copper;
+                ctx.lineCap = 'round';
+                ctx.lineWidth = cmd.diameter + 0.3;
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                ctx.lineTo(cmd.x2, cmd.y2);
+                ctx.stroke();
+                
+                // Slot hole
+                ctx.strokeStyle = this.colors.bg;
+                ctx.lineWidth = cmd.diameter;
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                ctx.lineTo(cmd.x2, cmd.y2);
+                ctx.stroke();
+            }
+        }
+    }
+    
+    drawFlash(ctx, x, y, ap) {
+        const t = ap.type, p = ap.params;
+        
+        if (t === 'C') {
+            ctx.beginPath();
+            ctx.arc(x, y, (p[0] || 0.5) / 2, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (t === 'R') {
+            const w = p[0] || 0.5;
+            const h = p.length > 1 ? p[1] : w;
+            ctx.fillRect(x - w/2, y - h/2, w, h);
+        } else if (t === 'O') {
+            const w = p[0] || 0.5;
+            const h = p.length > 1 ? p[1] : w;
+            ctx.beginPath();
+            if (Math.abs(w - h) < 0.001) {
+                ctx.arc(x, y, w/2, 0, Math.PI * 2);
+            } else if (w > h) {
+                const r = h / 2, dx = (w - h) / 2;
+                ctx.moveTo(x - dx, y - r);
+                ctx.lineTo(x + dx, y - r);
+                ctx.arc(x + dx, y, r, -Math.PI/2, Math.PI/2);
+                ctx.lineTo(x - dx, y + r);
+                ctx.arc(x - dx, y, r, Math.PI/2, -Math.PI/2);
+            } else {
+                const r = w / 2, dy = (h - w) / 2;
+                ctx.moveTo(x + r, y - dy);
+                ctx.lineTo(x + r, y + dy);
+                ctx.arc(x, y + dy, r, 0, Math.PI);
+                ctx.lineTo(x - r, y - dy);
+                ctx.arc(x, y - dy, r, Math.PI, 0);
+            }
+            ctx.closePath();
+            ctx.fill();
+        } else if (t === 'P') {
+            const od = p[0] || 0.5;
+            const vertices = p[1] || 4;
+            const rotation = (p[2] || 0) * Math.PI / 180;
+            ctx.beginPath();
+            for (let i = 0; i < vertices; i++) {
+                const angle = rotation + (i * 2 * Math.PI / vertices);
+                const px = x + (od/2) * Math.cos(angle);
+                const py = y + (od/2) * Math.sin(angle);
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            // Fallback
+            ctx.beginPath();
+            ctx.arc(x, y, (p[0] || 0.5) / 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+    
+    updateUI() {
+        this.updateFileList();
+        this.updateLayerList();
+        document.getElementById('layerCount').textContent = this.layers.length;
+    }
+    
+    updateFileList() {
+        document.getElementById('fileList').innerHTML = this.files.map((f, i) => {
+            const l = this.layers[i];
+            return `<div class="file-item"><span class="file-tag ${l.type}">${l.type.slice(0,4)}</span><span class="file-name">${f.name}</span><button class="file-del" onclick="viewer.removeFile(${i})">×</button></div>`;
+        }).join('');
+    }
+    
+    updateLayerList() {
+        document.getElementById('layerList').innerHTML = this.layers.length ? this.layers.map((l, i) => `
+            <div class="layer-item" onclick="viewer.toggleLayer(${i})">
+                <div class="layer-toggle ${l.visible ? 'on' : ''}"></div>
+                <div class="layer-color" style="background:${l.color}"></div>
+                <span class="layer-name">${l.name}</span>
+            </div>`).join('') : '<div style="color:var(--text2);text-align:center;padding:16px">Nessun layer</div>';
+    }
+    
+    toggleLayer(i) { this.layers[i].visible = !this.layers[i].visible; this.updateLayerList(); this.render(); }
+    
+    removeFile(i) {
+        this.files.splice(i, 1);
+        this.layers.splice(i, 1);
+        this.extractBoardOutline();
+        this.calcBounds();
+        this.updateUI();
+        this.updateStats();
+        if (!this.layers.length) { document.getElementById('emptyState').style.display = 'flex'; this.canvas2d.style.display = 'none'; }
+        else this.fit();
+    }
+    
+    clear() {
+        this.files = []; this.layers = []; this.bounds = null; this.boardOutline = null;
+        this.updateUI(); this.updateStats();
+        document.getElementById('emptyState').style.display = 'flex';
+        this.canvas2d.style.display = 'none';
+    }
+    
+    exportPng() {
+        if (!this.layers.length) return;
+        const a = document.createElement('a');
+        a.download = 'pcb.png';
+        a.href = this.canvas2d.toDataURL('image/png');
+        a.click();
+    }
+}
+
+const viewer = new GerberViewer();
+</script>
+</body>
+</html>
