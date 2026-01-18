@@ -1981,33 +1981,23 @@ class GerberViewer {
         // PCB thickness
         const pcbThickness = 1.6;
         const copperThickness = 0.035;
-        const maskThickness = 0.02;
-        const silkThickness = 0.01;
+        const maskThickness = 0.025;
+        const silkThickness = 0.015;
 
-        // Check if any drill layer is visible
-        const drillVisible = this.layers.some(l => l.type === 'drill' && l.visible);
-
-        // Collect drill holes if drill layer is visible
+        // Check if any drill layer is visible and collect holes
         const drillHoles = [];
-        if (drillVisible) {
-            for (const layer of this.layers) {
-                if (layer.type === 'drill' && layer.visible) {
-                    for (const cmd of layer.cmds) {
-                        drillHoles.push(cmd);
-                    }
+        for (const layer of this.layers) {
+            if (layer.type === 'drill' && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    drillHoles.push(cmd);
                 }
             }
         }
 
-        // FR4 base board
-        let boardShape = this.createBoardShape(cx, cy, bw, bh);
+        // FR4 base board with drill holes
+        const boardShape = this.createBoardShape(cx, cy, bw, bh);
+        this.addDrillHolesToShape(boardShape, drillHoles, cx, cy);
 
-        // Add drill holes to FR4 if visible
-        if (drillVisible) {
-            this.addDrillHolesToShape(boardShape, drillHoles, cx, cy);
-        }
-
-        // FR4 material - with physical holes
         const fr4Geometry = new THREE.ExtrudeGeometry(boardShape, {
             depth: pcbThickness,
             bevelEnabled: false
@@ -2017,51 +2007,53 @@ class GerberViewer {
         fr4Mesh.position.z = -pcbThickness / 2;
         this.pcbMesh.add(fr4Mesh);
 
-        // Add layers based on filters
+        // Sort layers
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
 
-        // Copper only mode - only render copper and inner layers
+        // Copper only mode
         if (this.copperOnly) {
             for (const layer of sorted) {
                 if (!layer.visible) continue;
                 if (layer.type === 'copper') {
                     const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                    this.addLayer3DWithHoles(layer, cx, cy, zPos, copperThickness, 0xb45309, drillHoles, bw, bh);
+                    this.addCopperLayer3D(layer, cx, cy, zPos, copperThickness, 0xb87333, drillHoles);
                 } else if (layer.type === 'inner') {
                     const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
-                    this.addLayer3DWithHoles(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles, bw, bh);
+                    this.addCopperLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles);
                 }
             }
         } else {
-            // Full rendering with all visible layers
-            // 1. Inner layers
+            // Full rendering
+            // 1. Inner copper layers
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'inner') continue;
                 const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
-                this.addLayer3DWithHoles(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles, bw, bh);
+                this.addCopperLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles);
             }
 
-            // 2. Copper layers
+            // 2. Copper layers (traces and pads only - not full board!)
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'copper') continue;
                 const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                this.addLayer3DWithHoles(layer, cx, cy, zPos, copperThickness, 0xb45309, drillHoles, bw, bh);
+                this.addCopperLayer3D(layer, cx, cy, zPos, copperThickness, 0xb87333, drillHoles);
             }
 
-            // 3. Solder mask with drill holes
+            // 3. Solder mask (full board with pad openings and drill holes)
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'mask') continue;
-                const zPos = layer.side === 'top' ? pcbThickness / 2 + copperThickness : -pcbThickness / 2 - copperThickness - maskThickness;
-                const maskColor = new THREE.Color(this.colors.mask);
-                this.addMaskLayer3D(layer, cx, cy, zPos, maskThickness, maskColor.getHex(), drillHoles, bw, bh);
+                const zPos = layer.side === 'top'
+                    ? pcbThickness / 2 + copperThickness
+                    : -pcbThickness / 2 - copperThickness - maskThickness;
+                this.addMaskLayer3D(layer, cx, cy, zPos, maskThickness, this.colors.mask, drillHoles, bw, bh);
             }
 
-            // 4. Silkscreen with drill holes
+            // 4. Silkscreen (individual elements only)
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'silk') continue;
-                const zPos = layer.side === 'top' ? pcbThickness / 2 + copperThickness + maskThickness : -pcbThickness / 2 - copperThickness - maskThickness - silkThickness;
-                const silkColor = new THREE.Color(this.colors.silk);
-                this.addLayer3DWithHoles(layer, cx, cy, zPos, silkThickness, silkColor.getHex(), drillHoles, bw, bh);
+                const zPos = layer.side === 'top'
+                    ? pcbThickness / 2 + copperThickness + maskThickness
+                    : -pcbThickness / 2 - copperThickness - maskThickness - silkThickness;
+                this.addSilkLayer3D(layer, cx, cy, zPos, silkThickness, this.colors.silk);
             }
         }
 
@@ -2069,11 +2061,9 @@ class GerberViewer {
 
         // Restore camera position or set initial position
         if (!isFirstRender && savedCameraPosition && savedControlsTarget) {
-            // Restore saved camera position
             this.camera.position.copy(savedCameraPosition);
             this.controls.target.copy(savedControlsTarget);
         } else {
-            // Center camera for first render
             const maxDim = Math.max(bw, bh);
             this.camera.position.set(0, -maxDim * 1.2, maxDim * 0.8);
             this.controls.target.set(0, 0, 0);
@@ -2082,35 +2072,31 @@ class GerberViewer {
     }
 
     createBoardShape(cx, cy, bw, bh) {
-        let boardShape;
+        const boardShape = new THREE.Shape();
         if (this.boardOutline?.length >= 3) {
-            boardShape = new THREE.Shape();
             boardShape.moveTo(this.boardOutline[0].x - cx, this.boardOutline[0].y - cy);
             for (let i = 1; i < this.boardOutline.length; i++) {
                 boardShape.lineTo(this.boardOutline[i].x - cx, this.boardOutline[i].y - cy);
             }
-            boardShape.closePath();
         } else {
-            boardShape = new THREE.Shape();
             boardShape.moveTo(-bw/2, -bh/2);
             boardShape.lineTo(bw/2, -bh/2);
             boardShape.lineTo(bw/2, bh/2);
             boardShape.lineTo(-bw/2, bh/2);
-            boardShape.closePath();
         }
+        boardShape.closePath();
         return boardShape;
     }
 
     addDrillHolesToShape(shape, drillHoles, cx, cy) {
+        const segments = 16; // Reduced for performance
         for (const cmd of drillHoles) {
             if (cmd.type === 'drill') {
-                // Create circular hole (clockwise winding)
                 const holePath = new THREE.Path();
-                const segments = 24;
                 const r = cmd.diameter / 2;
                 const hx = cmd.x - cx;
                 const hy = cmd.y - cy;
-                // Go clockwise (negative angle direction)
+                // Clockwise winding for holes
                 for (let i = segments; i >= 0; i--) {
                     const angle = (i / segments) * Math.PI * 2;
                     const px = hx + r * Math.cos(angle);
@@ -2120,20 +2106,14 @@ class GerberViewer {
                 }
                 shape.holes.push(holePath);
             } else if (cmd.type === 'slot') {
-                // Create slot hole (obround shape, clockwise)
                 const slotPath = new THREE.Path();
                 const r = cmd.diameter / 2;
-                const x1 = cmd.x1 - cx;
-                const y1 = cmd.y1 - cy;
-                const x2 = cmd.x2 - cx;
-                const y2 = cmd.y2 - cy;
-                const dx = x2 - x1;
-                const dy = y2 - y1;
+                const x1 = cmd.x1 - cx, y1 = cmd.y1 - cy;
+                const x2 = cmd.x2 - cx, y2 = cmd.y2 - cy;
+                const dx = x2 - x1, dy = y2 - y1;
                 const len = Math.sqrt(dx * dx + dy * dy);
                 if (len > 0.001) {
-                    const nx = -dy / len;
-                    const ny = dx / len;
-                    // Create obround path (clockwise)
+                    const nx = -dy / len, ny = dx / len;
                     slotPath.moveTo(x1 - nx * r, y1 - ny * r);
                     slotPath.lineTo(x2 - nx * r, y2 - ny * r);
                     slotPath.absarc(x2, y2, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
@@ -2145,77 +2125,123 @@ class GerberViewer {
         }
     }
 
-    addLayer3DWithHoles(layer, cx, cy, zPos, thickness, color, drillHoles, bw, bh) {
-        const material = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide });
+    // Copper layer - render individual traces, pads, regions (NOT full board!)
+    addCopperLayer3D(layer, cx, cy, zPos, thickness, color, drillHoles) {
+        const geometries = [];
+        const segments = 12; // Reduced for performance
 
-        // Create a full board shape for this layer and cut drill holes
-        const layerShape = this.createBoardShape(cx, cy, bw, bh);
-        if (drillHoles.length > 0) {
-            this.addDrillHolesToShape(layerShape, drillHoles, cx, cy);
-        }
-
-        // Render copper/silk as a layer with holes
         for (const cmd of layer.cmds) {
             if (cmd.polarity === 'clear') continue;
 
-            if (cmd.type === 'region' && cmd.points.length >= 3) {
-                try {
+            try {
+                if (cmd.type === 'region' && cmd.points?.length >= 3) {
                     const shape = new THREE.Shape();
                     shape.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
                     for (let i = 1; i < cmd.points.length; i++) {
                         shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
                     }
                     shape.closePath();
-
-                    // Add drill holes to this region
-                    if (drillHoles.length > 0) {
-                        this.addDrillHolesToShape(shape, drillHoles, cx, cy);
-                    }
-
-                    const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-                    const mesh = new THREE.Mesh(geometry, material);
-                    mesh.position.z = zPos;
-                    this.pcbMesh.add(mesh);
-                } catch (e) {
-                    // Skip invalid shapes
+                    // Add drill holes that intersect this region
+                    this.addDrillHolesToShape(shape, drillHoles, cx, cy);
+                    const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+                    geom.translate(0, 0, zPos);
+                    geometries.push(geom);
+                } else if (cmd.type === 'flash') {
+                    const geom = this.createFlashGeometry(cmd, cx, cy, zPos, thickness, segments);
+                    if (geom) geometries.push(geom);
+                } else if (cmd.type === 'line' && cmd.width > 0.001) {
+                    const geom = this.createLineGeometry(cmd, cx, cy, zPos, thickness, segments);
+                    if (geom) geometries.push(geom);
+                } else if (cmd.type === 'arc') {
+                    const geom = this.createArcGeometry(cmd, cx, cy, zPos, thickness);
+                    if (geom) geometries.push(geom);
                 }
-            } else if (cmd.type === 'flash') {
-                this.addFlash3D(cmd, cx, cy, zPos, thickness, material);
-            } else if (cmd.type === 'line') {
-                this.addLine3D(cmd, cx, cy, zPos, thickness, material);
-            } else if (cmd.type === 'arc') {
-                this.addArc3D(cmd, cx, cy, zPos, thickness, material);
+            } catch (e) {
+                // Skip invalid geometry
             }
+        }
+
+        if (geometries.length > 0) {
+            // Merge all geometries into one for performance
+            const mergedGeometry = this.mergeGeometries(geometries);
+            if (mergedGeometry) {
+                const material = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide });
+                const mesh = new THREE.Mesh(mergedGeometry, material);
+                this.pcbMesh.add(mesh);
+            }
+            // Dispose individual geometries
+            geometries.forEach(g => g.dispose());
         }
     }
 
-    addFlash3D(cmd, cx, cy, zPos, thickness, material) {
+    // Silkscreen - render individual elements only
+    addSilkLayer3D(layer, cx, cy, zPos, thickness, color) {
+        const geometries = [];
+        const segments = 8;
+
+        for (const cmd of layer.cmds) {
+            if (cmd.polarity === 'clear') continue;
+
+            try {
+                if (cmd.type === 'region' && cmd.points?.length >= 3) {
+                    const shape = new THREE.Shape();
+                    shape.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
+                    for (let i = 1; i < cmd.points.length; i++) {
+                        shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
+                    }
+                    shape.closePath();
+                    const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+                    geom.translate(0, 0, zPos);
+                    geometries.push(geom);
+                } else if (cmd.type === 'flash') {
+                    const geom = this.createFlashGeometry(cmd, cx, cy, zPos, thickness, segments);
+                    if (geom) geometries.push(geom);
+                } else if (cmd.type === 'line' && cmd.width > 0.001) {
+                    const geom = this.createLineGeometry(cmd, cx, cy, zPos, thickness, segments);
+                    if (geom) geometries.push(geom);
+                }
+            } catch (e) {
+                // Skip invalid geometry
+            }
+        }
+
+        if (geometries.length > 0) {
+            const mergedGeometry = this.mergeGeometries(geometries);
+            if (mergedGeometry) {
+                const colorHex = new THREE.Color(color).getHex();
+                const material = new THREE.MeshPhongMaterial({ color: colorHex, side: THREE.DoubleSide });
+                const mesh = new THREE.Mesh(mergedGeometry, material);
+                this.pcbMesh.add(mesh);
+            }
+            geometries.forEach(g => g.dispose());
+        }
+    }
+
+    createFlashGeometry(cmd, cx, cy, zPos, thickness, segments) {
         const ap = cmd.aperture;
         const x = cmd.x - cx;
         const y = cmd.y - cy;
-        let mesh;
 
         if (ap.type === 'C') {
-            // Circle
-            const radius = (ap.params[0] || 0.5) / 2;
-            const geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(x, y, zPos + thickness / 2);
-            mesh.rotation.x = Math.PI / 2;
+            const r = (ap.params[0] || 0.5) / 2;
+            const geom = new THREE.CylinderGeometry(r, r, thickness, segments);
+            geom.rotateX(Math.PI / 2);
+            geom.translate(x, y, zPos + thickness / 2);
+            return geom;
         } else if (ap.type === 'R') {
-            // Rectangle
             const w = ap.params[0] || 0.5;
             const h = ap.params.length > 1 ? ap.params[1] : w;
-            const geometry = new THREE.BoxGeometry(w, h, thickness);
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(x, y, zPos + thickness / 2);
-            if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+            const geom = new THREE.BoxGeometry(w, h, thickness);
+            geom.translate(x, y, zPos + thickness / 2);
+            if (ap.rotation) {
+                const matrix = new THREE.Matrix4().makeRotationZ(ap.rotation * Math.PI / 180);
+                geom.applyMatrix4(matrix);
+            }
+            return geom;
         } else if (ap.type === 'O') {
-            // Obround - create as rounded rectangle using shape
             const w = ap.params[0] || 0.5;
             const h = ap.params.length > 1 ? ap.params[1] : w;
             const r = Math.min(w, h) / 2;
-
             const shape = new THREE.Shape();
             if (w > h) {
                 const dx = (w - h) / 2;
@@ -2233,17 +2259,13 @@ class GerberViewer {
                 shape.absarc(0, -dy, r, Math.PI, 0, false);
             }
             shape.closePath();
-
-            const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(x, y, zPos);
-            if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: segments });
+            geom.translate(x, y, zPos);
+            return geom;
         } else if (ap.type === 'P') {
-            // Polygon
             const od = ap.params[0] || 0.5;
             const vertices = ap.params[1] || 4;
             const pRot = (ap.params[2] || 0) * Math.PI / 180;
-
             const shape = new THREE.Shape();
             for (let i = 0; i < vertices; i++) {
                 const angle = pRot + (i * 2 * Math.PI / vertices);
@@ -2253,152 +2275,221 @@ class GerberViewer {
                 else shape.lineTo(px, py);
             }
             shape.closePath();
-
-            const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(x, y, zPos);
-        } else if (ap.type === 'POLY' && ap.vertices) {
-            // Custom polygon from macro
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+            geom.translate(x, y, zPos);
+            return geom;
+        } else if (ap.type === 'POLY' && ap.vertices?.length >= 3) {
             const shape = new THREE.Shape();
             shape.moveTo(ap.vertices[0].x, ap.vertices[0].y);
             for (let i = 1; i < ap.vertices.length; i++) {
                 shape.lineTo(ap.vertices[i].x, ap.vertices[i].y);
             }
             shape.closePath();
-
-            const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(x, y, zPos);
-        } else {
-            // Fallback to circle
-            const geometry = new THREE.CylinderGeometry(0.25, 0.25, thickness, 16);
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(x, y, zPos + thickness / 2);
-            mesh.rotation.x = Math.PI / 2;
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+            geom.translate(x, y, zPos);
+            return geom;
         }
-
-        if (mesh) this.pcbMesh.add(mesh);
+        // Fallback circle
+        const geom = new THREE.CylinderGeometry(0.25, 0.25, thickness, segments);
+        geom.rotateX(Math.PI / 2);
+        geom.translate(x, y, zPos + thickness / 2);
+        return geom;
     }
 
-    addLine3D(cmd, cx, cy, zPos, thickness, material) {
+    createLineGeometry(cmd, cx, cy, zPos, thickness, segments) {
         const dx = cmd.x2 - cmd.x1;
         const dy = cmd.y2 - cmd.y1;
         const length = Math.sqrt(dx * dx + dy * dy);
-        if (length < 0.001) return;
+        if (length < 0.001) return null;
 
         const angle = Math.atan2(dy, dx);
         const width = cmd.width || 0.1;
-
-        // Create rounded line using shape for better visual
-        const shape = new THREE.Shape();
         const halfW = width / 2;
-        const halfL = length / 2;
 
-        // Rounded rectangle
-        shape.moveTo(-halfL, -halfW);
-        shape.lineTo(halfL, -halfW);
-        shape.absarc(halfL, 0, halfW, -Math.PI/2, Math.PI/2, false);
-        shape.lineTo(-halfL, halfW);
-        shape.absarc(-halfL, 0, halfW, Math.PI/2, -Math.PI/2, false);
+        // Create rounded line shape
+        const shape = new THREE.Shape();
+        shape.moveTo(-length/2, -halfW);
+        shape.lineTo(length/2, -halfW);
+        shape.absarc(length/2, 0, halfW, -Math.PI/2, Math.PI/2, false);
+        shape.lineTo(-length/2, halfW);
+        shape.absarc(-length/2, 0, halfW, Math.PI/2, -Math.PI/2, false);
         shape.closePath();
 
-        const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, zPos);
-        mesh.rotation.z = angle;
-        this.pcbMesh.add(mesh);
+        const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: segments });
+        geom.translate(0, 0, zPos);
+
+        // Apply rotation and position
+        const matrix = new THREE.Matrix4();
+        matrix.makeRotationZ(angle);
+        geom.applyMatrix4(matrix);
+        geom.translate((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, 0);
+
+        return geom;
     }
 
-    addArc3D(cmd, cx, cy, zPos, thickness, material) {
-        // Convert arc to line segments for 3D
+    createArcGeometry(cmd, cx, cy, zPos, thickness) {
+        // Convert arc to line segments
         const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+        if (pts.length < 2) return null;
+
+        const geometries = [];
         let px = cmd.x1, py = cmd.y1;
+        const width = cmd.width || 0.1;
 
         for (const p of pts) {
             const dx = p.x - px;
             const dy = p.y - py;
             const length = Math.sqrt(dx * dx + dy * dy);
-
             if (length > 0.001) {
                 const angle = Math.atan2(dy, dx);
-                const width = cmd.width || 0.1;
-
-                const geometry = new THREE.BoxGeometry(length + width, width, thickness);
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.set((px + p.x) / 2 - cx, (py + p.y) / 2 - cy, zPos + thickness / 2);
-                mesh.rotation.z = angle;
-                this.pcbMesh.add(mesh);
+                const geom = new THREE.BoxGeometry(length + width, width, thickness);
+                geom.translate(0, 0, zPos + thickness / 2);
+                const matrix = new THREE.Matrix4().makeRotationZ(angle);
+                geom.applyMatrix4(matrix);
+                geom.translate((px + p.x) / 2 - cx, (py + p.y) / 2 - cy, 0);
+                geometries.push(geom);
             }
-
             px = p.x;
             py = p.y;
         }
+
+        if (geometries.length === 0) return null;
+        return this.mergeGeometries(geometries);
+    }
+
+    mergeGeometries(geometries) {
+        if (geometries.length === 0) return null;
+        if (geometries.length === 1) return geometries[0].clone();
+
+        // Manual merge since BufferGeometryUtils might not be available
+        let totalPositions = 0;
+        let totalNormals = 0;
+        let totalIndices = 0;
+
+        for (const geom of geometries) {
+            if (!geom.attributes.position) continue;
+            totalPositions += geom.attributes.position.count * 3;
+            if (geom.attributes.normal) totalNormals += geom.attributes.normal.count * 3;
+            if (geom.index) totalIndices += geom.index.count;
+            else totalIndices += geom.attributes.position.count;
+        }
+
+        const positions = new Float32Array(totalPositions);
+        const normals = totalNormals > 0 ? new Float32Array(totalNormals) : null;
+        const indices = [];
+
+        let posOffset = 0;
+        let normalOffset = 0;
+        let indexOffset = 0;
+        let vertexOffset = 0;
+
+        for (const geom of geometries) {
+            if (!geom.attributes.position) continue;
+
+            const pos = geom.attributes.position.array;
+            positions.set(pos, posOffset);
+            posOffset += pos.length;
+
+            if (normals && geom.attributes.normal) {
+                const norm = geom.attributes.normal.array;
+                normals.set(norm, normalOffset);
+                normalOffset += norm.length;
+            }
+
+            if (geom.index) {
+                const idx = geom.index.array;
+                for (let i = 0; i < idx.length; i++) {
+                    indices.push(idx[i] + vertexOffset);
+                }
+            } else {
+                for (let i = 0; i < geom.attributes.position.count; i++) {
+                    indices.push(i + vertexOffset);
+                }
+            }
+
+            vertexOffset += geom.attributes.position.count;
+        }
+
+        const merged = new THREE.BufferGeometry();
+        merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        if (normals) merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        merged.setIndex(indices);
+        merged.computeVertexNormals();
+
+        return merged;
     }
 
     addMaskLayer3D(layer, cx, cy, zPos, thickness, color, drillHoles, bw, bh) {
+        const colorHex = new THREE.Color(color).getHex();
         const material = new THREE.MeshPhongMaterial({
-            color,
+            color: colorHex,
             transparent: true,
-            opacity: 0.78,
+            opacity: 0.8,
             side: THREE.DoubleSide
         });
 
         // Create mask shape from board outline
         const maskShape = this.createBoardShape(cx, cy, bw, bh);
 
-        // Add drill holes first
-        if (drillHoles.length > 0) {
-            this.addDrillHolesToShape(maskShape, drillHoles, cx, cy);
-        }
+        // Add drill holes
+        this.addDrillHolesToShape(maskShape, drillHoles, cx, cy);
 
-        // Add holes for each pad opening in the solder mask
+        // Add holes for each pad opening in the solder mask (clockwise winding)
+        const segments = 12;
         for (const cmd of layer.cmds) {
             if (cmd.polarity === 'clear') continue;
 
             if (cmd.type === 'flash') {
-                const hole = this.createApertureHole(cmd.aperture, cmd.x - cx, cmd.y - cy);
+                const hole = this.createApertureHole(cmd.aperture, cmd.x - cx, cmd.y - cy, segments);
                 if (hole) maskShape.holes.push(hole);
-            } else if (cmd.type === 'region' && cmd.points.length >= 3) {
+            } else if (cmd.type === 'region' && cmd.points?.length >= 3) {
+                // Regions in mask are pad openings - create clockwise holes
                 const hole = new THREE.Path();
-                hole.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
-                for (let i = 1; i < cmd.points.length; i++) {
-                    hole.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
+                // Reverse winding for holes
+                const pts = [...cmd.points].reverse();
+                hole.moveTo(pts[0].x - cx, pts[0].y - cy);
+                for (let i = 1; i < pts.length; i++) {
+                    hole.lineTo(pts[i].x - cx, pts[i].y - cy);
                 }
                 hole.closePath();
                 maskShape.holes.push(hole);
             }
         }
 
-        const geometry = new THREE.ExtrudeGeometry(maskShape, { depth: thickness, bevelEnabled: false });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.z = zPos;
-        this.pcbMesh.add(mesh);
+        try {
+            const geometry = new THREE.ExtrudeGeometry(maskShape, { depth: thickness, bevelEnabled: false });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.z = zPos;
+            this.pcbMesh.add(mesh);
+        } catch (e) {
+            // Skip if geometry creation fails
+        }
     }
 
-    createApertureHole(ap, x, y) {
+    createApertureHole(ap, x, y, segments = 12) {
         const hole = new THREE.Path();
-        const segments = 24;
 
         if (ap.type === 'C') {
             const r = (ap.params[0] || 0.5) / 2;
-            for (let i = 0; i <= segments; i++) {
+            // Clockwise winding for holes
+            for (let i = segments; i >= 0; i--) {
                 const angle = (i / segments) * Math.PI * 2;
                 const px = x + r * Math.cos(angle);
                 const py = y + r * Math.sin(angle);
-                if (i === 0) hole.moveTo(px, py);
+                if (i === segments) hole.moveTo(px, py);
                 else hole.lineTo(px, py);
             }
-            hole.closePath();
             return hole;
         } else if (ap.type === 'R') {
             const w = ap.params[0] || 0.5;
             const h = ap.params.length > 1 ? ap.params[1] : w;
             const rot = (ap.rotation || 0) * Math.PI / 180;
+            // Clockwise corners
             const corners = [
                 { x: -w/2, y: -h/2 },
-                { x: w/2, y: -h/2 },
+                { x: -w/2, y: h/2 },
                 { x: w/2, y: h/2 },
-                { x: -w/2, y: h/2 }
+                { x: w/2, y: -h/2 }
             ];
             for (let i = 0; i < corners.length; i++) {
                 let cx = corners[i].x, cy = corners[i].y;
@@ -2410,62 +2501,61 @@ class GerberViewer {
                 if (i === 0) hole.moveTo(x + cx, y + cy);
                 else hole.lineTo(x + cx, y + cy);
             }
-            hole.closePath();
             return hole;
         } else if (ap.type === 'O') {
             const w = ap.params[0] || 0.5;
             const h = ap.params.length > 1 ? ap.params[1] : w;
             const r = Math.min(w, h) / 2;
 
+            // Clockwise winding for obround holes
             if (w > h) {
                 const dx = (w - h) / 2;
-                hole.moveTo(x - dx, y - r);
-                hole.lineTo(x + dx, y - r);
-                hole.absarc(x + dx, y, r, -Math.PI/2, Math.PI/2, false);
-                hole.lineTo(x - dx, y + r);
-                hole.absarc(x - dx, y, r, Math.PI/2, -Math.PI/2, false);
+                hole.moveTo(x + dx, y - r);
+                hole.lineTo(x - dx, y - r);
+                hole.absarc(x - dx, y, r, -Math.PI/2, Math.PI/2, true);
+                hole.lineTo(x + dx, y + r);
+                hole.absarc(x + dx, y, r, Math.PI/2, -Math.PI/2, true);
             } else {
                 const dy = (h - w) / 2;
-                hole.moveTo(x + r, y - dy);
-                hole.lineTo(x + r, y + dy);
-                hole.absarc(x, y + dy, r, 0, Math.PI, false);
-                hole.lineTo(x - r, y - dy);
-                hole.absarc(x, y - dy, r, Math.PI, 0, false);
+                hole.moveTo(x + r, y + dy);
+                hole.lineTo(x + r, y - dy);
+                hole.absarc(x, y - dy, r, 0, Math.PI, true);
+                hole.lineTo(x - r, y + dy);
+                hole.absarc(x, y + dy, r, Math.PI, 0, true);
             }
-            hole.closePath();
             return hole;
         } else if (ap.type === 'P') {
             const od = ap.params[0] || 0.5;
             const vertices = ap.params[1] || 4;
             const pRot = (ap.params[2] || 0) * Math.PI / 180;
-            for (let i = 0; i < vertices; i++) {
+            // Clockwise winding
+            for (let i = vertices - 1; i >= 0; i--) {
                 const angle = pRot + (i * 2 * Math.PI / vertices);
                 const px = x + (od / 2) * Math.cos(angle);
                 const py = y + (od / 2) * Math.sin(angle);
-                if (i === 0) hole.moveTo(px, py);
+                if (i === vertices - 1) hole.moveTo(px, py);
                 else hole.lineTo(px, py);
             }
-            hole.closePath();
             return hole;
-        } else if (ap.type === 'POLY' && ap.vertices) {
-            hole.moveTo(x + ap.vertices[0].x, y + ap.vertices[0].y);
-            for (let i = 1; i < ap.vertices.length; i++) {
-                hole.lineTo(x + ap.vertices[i].x, y + ap.vertices[i].y);
+        } else if (ap.type === 'POLY' && ap.vertices?.length >= 3) {
+            // Reverse vertices for clockwise winding
+            const verts = [...ap.vertices].reverse();
+            hole.moveTo(x + verts[0].x, y + verts[0].y);
+            for (let i = 1; i < verts.length; i++) {
+                hole.lineTo(x + verts[i].x, y + verts[i].y);
             }
-            hole.closePath();
             return hole;
         }
 
-        // Fallback: small circle
+        // Fallback: small circle clockwise
         const r = 0.25;
-        for (let i = 0; i <= segments; i++) {
+        for (let i = segments; i >= 0; i--) {
             const angle = (i / segments) * Math.PI * 2;
             const px = x + r * Math.cos(angle);
             const py = y + r * Math.sin(angle);
-            if (i === 0) hole.moveTo(px, py);
+            if (i === segments) hole.moveTo(px, py);
             else hole.lineTo(px, py);
         }
-        hole.closePath();
         return hole;
     }
 
