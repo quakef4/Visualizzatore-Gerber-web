@@ -269,7 +269,7 @@
             <div class="measure-info" id="measureInfo">
                 <div>Distanza: <span class="measure-value" id="measureValue">0.00 mm</span></div>
                 <div style="font-size:11px;color:var(--text2);margin-top:4px" id="measureDetails"></div>
-                <div style="font-size:10px;color:var(--text2);margin-top:6px">Click: nuovo punto | Tasto destro/ESC: annulla</div>
+                <div style="font-size:10px;color:var(--text2);margin-top:6px">Click: punto | Shift+trascina: sposta | Dx/ESC: annulla</div>
             </div>
         </div>
     </main>
@@ -457,6 +457,13 @@ class GerberViewer {
 
         container.onmousedown = e => {
             if (this.mode !== '2d') return;
+            // Shift+click during measuring = pan mode
+            if (this.measuring && e.shiftKey && e.button === 0) {
+                this.drag = true;
+                this.lastMouse = {x:e.clientX, y:e.clientY};
+                this.canvas2d.style.cursor = 'grabbing';
+                return;
+            }
             // Left click only for measuring
             if (this.measuring && e.button === 0) {
                 let coords = this.screenToWorld(e.clientX, e.clientY);
@@ -513,6 +520,14 @@ class GerberViewer {
 
         container.onmousemove = e => {
             if (this.mode !== '2d') return;
+            // Pan during measurement with Shift held
+            if (this.drag) {
+                this.pan.x += e.clientX - this.lastMouse.x;
+                this.pan.y += e.clientY - this.lastMouse.y;
+                this.render();
+                this.lastMouse = {x:e.clientX, y:e.clientY};
+                return;
+            }
             if (this.measuring && this.measureStart && !this.measureEnd) {
                 let coords = this.screenToWorld(e.clientX, e.clientY);
                 // Apply snap if enabled
@@ -524,17 +539,12 @@ class GerberViewer {
                 this.showMeasurement(true);
                 this.render();
             }
-            if (!this.drag) return;
-            this.pan.x += e.clientX - this.lastMouse.x;
-            this.pan.y += e.clientY - this.lastMouse.y;
-            this.render();
-            this.lastMouse = {x:e.clientX, y:e.clientY};
         };
 
-        container.onmouseup = container.onmouseleave = () => {
+        container.onmouseup = container.onmouseleave = (e) => {
             if (this.mode !== '2d') return;
             this.drag = false;
-            if (!this.measuring) this.canvas2d.style.cursor = 'grab';
+            this.canvas2d.style.cursor = this.measuring ? 'crosshair' : 'grab';
         };
 
         window.onresize = () => {
@@ -1974,70 +1984,27 @@ class GerberViewer {
         const maskThickness = 0.02;
         const silkThickness = 0.01;
 
-        // FR4 base board
-        let boardShape;
-        if (this.boardOutline?.length >= 3) {
-            boardShape = new THREE.Shape();
-            boardShape.moveTo(this.boardOutline[0].x - cx, this.boardOutline[0].y - cy);
-            for (let i = 1; i < this.boardOutline.length; i++) {
-                boardShape.lineTo(this.boardOutline[i].x - cx, this.boardOutline[i].y - cy);
-            }
-            boardShape.closePath();
-        } else {
-            boardShape = new THREE.Shape();
-            boardShape.moveTo(-bw/2, -bh/2);
-            boardShape.lineTo(bw/2, -bh/2);
-            boardShape.lineTo(bw/2, bh/2);
-            boardShape.lineTo(-bw/2, bh/2);
-            boardShape.closePath();
-        }
+        // Check if any drill layer is visible
+        const drillVisible = this.layers.some(l => l.type === 'drill' && l.visible);
 
-        // Add physical drill holes to the board shape
-        // Holes must be wound in opposite direction (clockwise)
-        for (const layer of this.layers) {
-            if (layer.type === 'drill') {
-                for (const cmd of layer.cmds) {
-                    if (cmd.type === 'drill') {
-                        // Create circular hole (clockwise winding)
-                        const holePath = new THREE.Path();
-                        const segments = 24;
-                        const r = cmd.diameter / 2;
-                        const hx = cmd.x - cx;
-                        const hy = cmd.y - cy;
-                        // Go clockwise (negative angle direction)
-                        for (let i = segments; i >= 0; i--) {
-                            const angle = (i / segments) * Math.PI * 2;
-                            const px = hx + r * Math.cos(angle);
-                            const py = hy + r * Math.sin(angle);
-                            if (i === segments) holePath.moveTo(px, py);
-                            else holePath.lineTo(px, py);
-                        }
-                        boardShape.holes.push(holePath);
-                    } else if (cmd.type === 'slot') {
-                        // Create slot hole (obround shape, clockwise)
-                        const slotPath = new THREE.Path();
-                        const r = cmd.diameter / 2;
-                        const x1 = cmd.x1 - cx;
-                        const y1 = cmd.y1 - cy;
-                        const x2 = cmd.x2 - cx;
-                        const y2 = cmd.y2 - cy;
-                        const dx = x2 - x1;
-                        const dy = y2 - y1;
-                        const len = Math.sqrt(dx * dx + dy * dy);
-                        if (len > 0.001) {
-                            const nx = -dy / len;
-                            const ny = dx / len;
-                            // Create obround path (clockwise)
-                            slotPath.moveTo(x1 - nx * r, y1 - ny * r);
-                            slotPath.lineTo(x2 - nx * r, y2 - ny * r);
-                            slotPath.absarc(x2, y2, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
-                            slotPath.lineTo(x1 + nx * r, y1 + ny * r);
-                            slotPath.absarc(x1, y1, r, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
-                            boardShape.holes.push(slotPath);
-                        }
+        // Collect drill holes if drill layer is visible
+        const drillHoles = [];
+        if (drillVisible) {
+            for (const layer of this.layers) {
+                if (layer.type === 'drill' && layer.visible) {
+                    for (const cmd of layer.cmds) {
+                        drillHoles.push(cmd);
                     }
                 }
             }
+        }
+
+        // FR4 base board
+        let boardShape = this.createBoardShape(cx, cy, bw, bh);
+
+        // Add drill holes to FR4 if visible
+        if (drillVisible) {
+            this.addDrillHolesToShape(boardShape, drillHoles, cx, cy);
         }
 
         // FR4 material - with physical holes
@@ -2059,10 +2026,10 @@ class GerberViewer {
                 if (!layer.visible) continue;
                 if (layer.type === 'copper') {
                     const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                    this.addLayer3D(layer, cx, cy, zPos, copperThickness, 0xb45309);
+                    this.addLayer3DWithHoles(layer, cx, cy, zPos, copperThickness, 0xb45309, drillHoles, bw, bh);
                 } else if (layer.type === 'inner') {
                     const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
-                    this.addLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32);
+                    this.addLayer3DWithHoles(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles, bw, bh);
                 }
             }
         } else {
@@ -2071,34 +2038,32 @@ class GerberViewer {
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'inner') continue;
                 const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
-                this.addLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32);
+                this.addLayer3DWithHoles(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles, bw, bh);
             }
 
             // 2. Copper layers
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'copper') continue;
                 const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                this.addLayer3D(layer, cx, cy, zPos, copperThickness, 0xb45309);
+                this.addLayer3DWithHoles(layer, cx, cy, zPos, copperThickness, 0xb45309, drillHoles, bw, bh);
             }
 
-            // 3. Solder mask
+            // 3. Solder mask with drill holes
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'mask') continue;
                 const zPos = layer.side === 'top' ? pcbThickness / 2 + copperThickness : -pcbThickness / 2 - copperThickness - maskThickness;
                 const maskColor = new THREE.Color(this.colors.mask);
-                this.addMaskLayer3D(layer, cx, cy, zPos, maskThickness, maskColor.getHex(), boardShape);
+                this.addMaskLayer3D(layer, cx, cy, zPos, maskThickness, maskColor.getHex(), drillHoles, bw, bh);
             }
 
-            // 4. Silkscreen
+            // 4. Silkscreen with drill holes
             for (const layer of sorted) {
                 if (!layer.visible || layer.type !== 'silk') continue;
                 const zPos = layer.side === 'top' ? pcbThickness / 2 + copperThickness + maskThickness : -pcbThickness / 2 - copperThickness - maskThickness - silkThickness;
                 const silkColor = new THREE.Color(this.colors.silk);
-                this.addLayer3D(layer, cx, cy, zPos, silkThickness, silkColor.getHex());
+                this.addLayer3DWithHoles(layer, cx, cy, zPos, silkThickness, silkColor.getHex(), drillHoles, bw, bh);
             }
         }
-
-        // Drill holes are now physical holes in the board shape (no cylinders needed)
 
         this.scene.add(this.pcbMesh);
 
@@ -2116,9 +2081,80 @@ class GerberViewer {
         this.controls.update();
     }
 
-    addLayer3D(layer, cx, cy, zPos, thickness, color) {
+    createBoardShape(cx, cy, bw, bh) {
+        let boardShape;
+        if (this.boardOutline?.length >= 3) {
+            boardShape = new THREE.Shape();
+            boardShape.moveTo(this.boardOutline[0].x - cx, this.boardOutline[0].y - cy);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                boardShape.lineTo(this.boardOutline[i].x - cx, this.boardOutline[i].y - cy);
+            }
+            boardShape.closePath();
+        } else {
+            boardShape = new THREE.Shape();
+            boardShape.moveTo(-bw/2, -bh/2);
+            boardShape.lineTo(bw/2, -bh/2);
+            boardShape.lineTo(bw/2, bh/2);
+            boardShape.lineTo(-bw/2, bh/2);
+            boardShape.closePath();
+        }
+        return boardShape;
+    }
+
+    addDrillHolesToShape(shape, drillHoles, cx, cy) {
+        for (const cmd of drillHoles) {
+            if (cmd.type === 'drill') {
+                // Create circular hole (clockwise winding)
+                const holePath = new THREE.Path();
+                const segments = 24;
+                const r = cmd.diameter / 2;
+                const hx = cmd.x - cx;
+                const hy = cmd.y - cy;
+                // Go clockwise (negative angle direction)
+                for (let i = segments; i >= 0; i--) {
+                    const angle = (i / segments) * Math.PI * 2;
+                    const px = hx + r * Math.cos(angle);
+                    const py = hy + r * Math.sin(angle);
+                    if (i === segments) holePath.moveTo(px, py);
+                    else holePath.lineTo(px, py);
+                }
+                shape.holes.push(holePath);
+            } else if (cmd.type === 'slot') {
+                // Create slot hole (obround shape, clockwise)
+                const slotPath = new THREE.Path();
+                const r = cmd.diameter / 2;
+                const x1 = cmd.x1 - cx;
+                const y1 = cmd.y1 - cy;
+                const x2 = cmd.x2 - cx;
+                const y2 = cmd.y2 - cy;
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 0.001) {
+                    const nx = -dy / len;
+                    const ny = dx / len;
+                    // Create obround path (clockwise)
+                    slotPath.moveTo(x1 - nx * r, y1 - ny * r);
+                    slotPath.lineTo(x2 - nx * r, y2 - ny * r);
+                    slotPath.absarc(x2, y2, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
+                    slotPath.lineTo(x1 + nx * r, y1 + ny * r);
+                    slotPath.absarc(x1, y1, r, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
+                    shape.holes.push(slotPath);
+                }
+            }
+        }
+    }
+
+    addLayer3DWithHoles(layer, cx, cy, zPos, thickness, color, drillHoles, bw, bh) {
         const material = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide });
 
+        // Create a full board shape for this layer and cut drill holes
+        const layerShape = this.createBoardShape(cx, cy, bw, bh);
+        if (drillHoles.length > 0) {
+            this.addDrillHolesToShape(layerShape, drillHoles, cx, cy);
+        }
+
+        // Render copper/silk as a layer with holes
         for (const cmd of layer.cmds) {
             if (cmd.polarity === 'clear') continue;
 
@@ -2130,6 +2166,11 @@ class GerberViewer {
                         shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
                     }
                     shape.closePath();
+
+                    // Add drill holes to this region
+                    if (drillHoles.length > 0) {
+                        this.addDrillHolesToShape(shape, drillHoles, cx, cy);
+                    }
 
                     const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
                     const mesh = new THREE.Mesh(geometry, material);
@@ -2294,7 +2335,7 @@ class GerberViewer {
         }
     }
 
-    addMaskLayer3D(layer, cx, cy, zPos, thickness, color, boardShape) {
+    addMaskLayer3D(layer, cx, cy, zPos, thickness, color, drillHoles, bw, bh) {
         const material = new THREE.MeshPhongMaterial({
             color,
             transparent: true,
@@ -2302,24 +2343,12 @@ class GerberViewer {
             side: THREE.DoubleSide
         });
 
-        // Clone the board shape and add holes for pad openings
-        const maskShape = new THREE.Shape();
+        // Create mask shape from board outline
+        const maskShape = this.createBoardShape(cx, cy, bw, bh);
 
-        // Copy the board outline
-        if (this.boardOutline?.length >= 3) {
-            maskShape.moveTo(this.boardOutline[0].x - cx, this.boardOutline[0].y - cy);
-            for (let i = 1; i < this.boardOutline.length; i++) {
-                maskShape.lineTo(this.boardOutline[i].x - cx, this.boardOutline[i].y - cy);
-            }
-            maskShape.closePath();
-        } else {
-            const bw = this.bounds.maxX - this.bounds.minX;
-            const bh = this.bounds.maxY - this.bounds.minY;
-            maskShape.moveTo(-bw/2, -bh/2);
-            maskShape.lineTo(bw/2, -bh/2);
-            maskShape.lineTo(bw/2, bh/2);
-            maskShape.lineTo(-bw/2, bh/2);
-            maskShape.closePath();
+        // Add drill holes first
+        if (drillHoles.length > 0) {
+            this.addDrillHolesToShape(maskShape, drillHoles, cx, cy);
         }
 
         // Add holes for each pad opening in the solder mask
