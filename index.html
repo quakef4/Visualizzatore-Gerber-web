@@ -636,10 +636,20 @@ class GerberViewer {
             this.canvas2d.style.display = 'block';
             document.getElementById('canvas3d').style.display = 'none';
             this.stop3DAnimation();
+            // Restore TOP view when returning to 2D
+            document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
+            document.querySelector('.view-btn[data-view="top"]').classList.add('active');
+            this.setView('top');
             this.fit();
         } else {
             this.canvas2d.style.display = 'none';
             document.getElementById('canvas3d').style.display = 'block';
+            // Enable all layers for 3D view
+            this.layers.forEach(l => l.visible = true);
+            this.updateLayerList();
+            document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
+            document.querySelector('.view-btn[data-view="all"]').classList.add('active');
+            this.currentView = 'all';
             this.init3D();
             this.update3D();
             this.start3DAnimation();
@@ -1944,7 +1954,55 @@ class GerberViewer {
             boardShape.closePath();
         }
 
-        // FR4 material - always show
+        // Add physical drill holes to the board shape
+        for (const layer of this.layers) {
+            if (layer.type === 'drill') {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'drill') {
+                        // Create circular hole
+                        const holePath = new THREE.Path();
+                        const segments = 24;
+                        const r = cmd.diameter / 2;
+                        const hx = cmd.x - cx;
+                        const hy = cmd.y - cy;
+                        for (let i = 0; i <= segments; i++) {
+                            const angle = (i / segments) * Math.PI * 2;
+                            const px = hx + r * Math.cos(angle);
+                            const py = hy + r * Math.sin(angle);
+                            if (i === 0) holePath.moveTo(px, py);
+                            else holePath.lineTo(px, py);
+                        }
+                        holePath.closePath();
+                        boardShape.holes.push(holePath);
+                    } else if (cmd.type === 'slot') {
+                        // Create slot hole (obround shape)
+                        const slotPath = new THREE.Path();
+                        const r = cmd.diameter / 2;
+                        const x1 = cmd.x1 - cx;
+                        const y1 = cmd.y1 - cy;
+                        const x2 = cmd.x2 - cx;
+                        const y2 = cmd.y2 - cy;
+                        const dx = x2 - x1;
+                        const dy = y2 - y1;
+                        const len = Math.sqrt(dx * dx + dy * dy);
+                        if (len > 0.001) {
+                            const nx = -dy / len;
+                            const ny = dx / len;
+                            // Create obround path
+                            slotPath.moveTo(x1 + nx * r, y1 + ny * r);
+                            slotPath.lineTo(x2 + nx * r, y2 + ny * r);
+                            slotPath.absarc(x2, y2, r, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
+                            slotPath.lineTo(x1 - nx * r, y1 - ny * r);
+                            slotPath.absarc(x1, y1, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
+                            slotPath.closePath();
+                            boardShape.holes.push(slotPath);
+                        }
+                    }
+                }
+            }
+        }
+
+        // FR4 material - with physical holes
         const fr4Geometry = new THREE.ExtrudeGeometry(boardShape, {
             depth: pcbThickness,
             bevelEnabled: false
@@ -2002,51 +2060,7 @@ class GerberViewer {
             }
         }
 
-        // Add drill holes (always visible if drill layer is visible)
-        for (const layer of this.layers) {
-            if (layer.type === 'drill' && layer.visible) {
-                for (const cmd of layer.cmds) {
-                    if (cmd.type === 'drill') {
-                        const holeGeometry = new THREE.CylinderGeometry(cmd.diameter / 2, cmd.diameter / 2, pcbThickness + 1, 24);
-                        const holeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
-                        const holeMesh = new THREE.Mesh(holeGeometry, holeMaterial);
-                        holeMesh.position.set(cmd.x - cx, cmd.y - cy, 0);
-                        holeMesh.rotation.x = Math.PI / 2;
-                        this.pcbMesh.add(holeMesh);
-                    } else if (cmd.type === 'slot') {
-                        // Render slot as capsule shape
-                        const dx = cmd.x2 - cmd.x1;
-                        const dy = cmd.y2 - cmd.y1;
-                        const length = Math.sqrt(dx * dx + dy * dy);
-                        const angle = Math.atan2(dy, dx);
-
-                        const slotGeometry = new THREE.CylinderGeometry(cmd.diameter / 2, cmd.diameter / 2, pcbThickness + 1, 16);
-                        const slotMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
-
-                        // Start cap
-                        const cap1 = new THREE.Mesh(slotGeometry, slotMaterial);
-                        cap1.position.set(cmd.x1 - cx, cmd.y1 - cy, 0);
-                        cap1.rotation.x = Math.PI / 2;
-                        this.pcbMesh.add(cap1);
-
-                        // End cap
-                        const cap2 = new THREE.Mesh(slotGeometry.clone(), slotMaterial);
-                        cap2.position.set(cmd.x2 - cx, cmd.y2 - cy, 0);
-                        cap2.rotation.x = Math.PI / 2;
-                        this.pcbMesh.add(cap2);
-
-                        // Connecting box
-                        if (length > 0.01) {
-                            const boxGeometry = new THREE.BoxGeometry(length, cmd.diameter, pcbThickness + 1);
-                            const boxMesh = new THREE.Mesh(boxGeometry, slotMaterial);
-                            boxMesh.position.set((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, 0);
-                            boxMesh.rotation.z = angle;
-                            this.pcbMesh.add(boxMesh);
-                        }
-                    }
-                }
-            }
-        }
+        // Drill holes are now physical holes in the board shape (no cylinders needed)
 
         this.scene.add(this.pcbMesh);
 
