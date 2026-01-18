@@ -392,6 +392,7 @@ class GerberViewer {
             this.copperOnly = !this.copperOnly;
             document.getElementById('btnCopperOnly').classList.toggle('active', this.copperOnly);
             this.render();
+            if (this.mode === '3d') this.update3D();
         };
 
         document.querySelectorAll('.view-btn[data-mode]').forEach(btn => {
@@ -521,13 +522,38 @@ class GerberViewer {
         if (mode === '2d') {
             this.canvas2d.style.display = 'block';
             document.getElementById('canvas3d').style.display = 'none';
+            this.stop3DAnimation();
             this.fit();
         } else {
             this.canvas2d.style.display = 'none';
             document.getElementById('canvas3d').style.display = 'block';
             this.init3D();
             this.update3D();
+            this.start3DAnimation();
         }
+    }
+
+    stop3DAnimation() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+    }
+
+    start3DAnimation() {
+        if (this.animationId) return;
+        const animate = () => {
+            if (this.mode !== '3d') {
+                this.animationId = null;
+                return;
+            }
+            this.animationId = requestAnimationFrame(animate);
+            if (this.controls) this.controls.update();
+            if (this.renderer && this.scene && this.camera) {
+                this.renderer.render(this.scene, this.camera);
+            }
+        };
+        animate();
     }
 
     setView(view) {
@@ -1715,8 +1741,11 @@ class GerberViewer {
         container.appendChild(this.renderer.domElement);
 
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.05;
+        // Disable damping to avoid flywheel effect
+        this.controls.enableDamping = false;
+        this.controls.rotateSpeed = 0.8;
+        this.controls.zoomSpeed = 1.0;
+        this.controls.panSpeed = 0.8;
 
         // Lights
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -1729,8 +1758,6 @@ class GerberViewer {
         const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
         directionalLight2.position.set(-50, -50, 50);
         this.scene.add(directionalLight2);
-
-        this.animate3D();
     }
 
     resize3D() {
@@ -1742,13 +1769,6 @@ class GerberViewer {
         this.renderer.setSize(rect.width, rect.height);
     }
 
-    animate3D() {
-        if (this.mode !== '3d') return;
-        requestAnimationFrame(() => this.animate3D());
-        this.controls.update();
-        this.renderer.render(this.scene, this.camera);
-    }
-
     update3D() {
         if (!this.bounds || !this.scene) return;
 
@@ -1757,7 +1777,13 @@ class GerberViewer {
             this.scene.remove(this.pcbMesh);
             this.pcbMesh.traverse(child => {
                 if (child.geometry) child.geometry.dispose();
-                if (child.material) child.material.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
             });
         }
 
@@ -1792,7 +1818,7 @@ class GerberViewer {
             boardShape.closePath();
         }
 
-        // FR4 material
+        // FR4 material - always show
         const fr4Geometry = new THREE.ExtrudeGeometry(boardShape, {
             depth: pcbThickness,
             bevelEnabled: false
@@ -1802,40 +1828,95 @@ class GerberViewer {
         fr4Mesh.position.z = -pcbThickness / 2;
         this.pcbMesh.add(fr4Mesh);
 
-        // Add copper layers as thin extruded shapes
+        // Add layers based on filters
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
 
-        for (const layer of sorted) {
-            if (!layer.visible) continue;
-
-            if (layer.type === 'copper') {
-                const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                this.addLayer3D(layer, cx, cy, zPos, copperThickness, 0xb45309);
-            } else if (layer.type === 'inner') {
+        // Copper only mode - only render copper and inner layers
+        if (this.copperOnly) {
+            for (const layer of sorted) {
+                if (!layer.visible) continue;
+                if (layer.type === 'copper') {
+                    const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
+                    this.addLayer3D(layer, cx, cy, zPos, copperThickness, 0xb45309);
+                } else if (layer.type === 'inner') {
+                    const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
+                    this.addLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32);
+                }
+            }
+        } else {
+            // Full rendering with all visible layers
+            // 1. Inner layers
+            for (const layer of sorted) {
+                if (!layer.visible || layer.type !== 'inner') continue;
                 const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
                 this.addLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32);
-            } else if (layer.type === 'mask') {
+            }
+
+            // 2. Copper layers
+            for (const layer of sorted) {
+                if (!layer.visible || layer.type !== 'copper') continue;
+                const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
+                this.addLayer3D(layer, cx, cy, zPos, copperThickness, 0xb45309);
+            }
+
+            // 3. Solder mask
+            for (const layer of sorted) {
+                if (!layer.visible || layer.type !== 'mask') continue;
                 const zPos = layer.side === 'top' ? pcbThickness / 2 + copperThickness : -pcbThickness / 2 - copperThickness - maskThickness;
                 const maskColor = new THREE.Color(this.colors.mask);
                 this.addMaskLayer3D(layer, cx, cy, zPos, maskThickness, maskColor.getHex(), boardShape);
-            } else if (layer.type === 'silk') {
+            }
+
+            // 4. Silkscreen
+            for (const layer of sorted) {
+                if (!layer.visible || layer.type !== 'silk') continue;
                 const zPos = layer.side === 'top' ? pcbThickness / 2 + copperThickness + maskThickness : -pcbThickness / 2 - copperThickness - maskThickness - silkThickness;
                 const silkColor = new THREE.Color(this.colors.silk);
                 this.addLayer3D(layer, cx, cy, zPos, silkThickness, silkColor.getHex());
             }
         }
 
-        // Add drill holes
+        // Add drill holes (always visible if drill layer is visible)
         for (const layer of this.layers) {
             if (layer.type === 'drill' && layer.visible) {
                 for (const cmd of layer.cmds) {
                     if (cmd.type === 'drill') {
-                        const holeGeometry = new THREE.CylinderGeometry(cmd.diameter / 2, cmd.diameter / 2, pcbThickness + 1, 16);
-                        const holeMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+                        const holeGeometry = new THREE.CylinderGeometry(cmd.diameter / 2, cmd.diameter / 2, pcbThickness + 1, 24);
+                        const holeMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
                         const holeMesh = new THREE.Mesh(holeGeometry, holeMaterial);
                         holeMesh.position.set(cmd.x - cx, cmd.y - cy, 0);
                         holeMesh.rotation.x = Math.PI / 2;
                         this.pcbMesh.add(holeMesh);
+                    } else if (cmd.type === 'slot') {
+                        // Render slot as capsule shape
+                        const dx = cmd.x2 - cmd.x1;
+                        const dy = cmd.y2 - cmd.y1;
+                        const length = Math.sqrt(dx * dx + dy * dy);
+                        const angle = Math.atan2(dy, dx);
+
+                        const slotGeometry = new THREE.CylinderGeometry(cmd.diameter / 2, cmd.diameter / 2, pcbThickness + 1, 16);
+                        const slotMaterial = new THREE.MeshPhongMaterial({ color: 0x222222 });
+
+                        // Start cap
+                        const cap1 = new THREE.Mesh(slotGeometry, slotMaterial);
+                        cap1.position.set(cmd.x1 - cx, cmd.y1 - cy, 0);
+                        cap1.rotation.x = Math.PI / 2;
+                        this.pcbMesh.add(cap1);
+
+                        // End cap
+                        const cap2 = new THREE.Mesh(slotGeometry.clone(), slotMaterial);
+                        cap2.position.set(cmd.x2 - cx, cmd.y2 - cy, 0);
+                        cap2.rotation.x = Math.PI / 2;
+                        this.pcbMesh.add(cap2);
+
+                        // Connecting box
+                        if (length > 0.01) {
+                            const boxGeometry = new THREE.BoxGeometry(length, cmd.diameter, pcbThickness + 1);
+                            const boxMesh = new THREE.Mesh(boxGeometry, slotMaterial);
+                            boxMesh.position.set((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, 0);
+                            boxMesh.rotation.z = angle;
+                            this.pcbMesh.add(boxMesh);
+                        }
                     }
                 }
             }
@@ -1857,47 +1938,174 @@ class GerberViewer {
             if (cmd.polarity === 'clear') continue;
 
             if (cmd.type === 'region' && cmd.points.length >= 3) {
-                const shape = new THREE.Shape();
-                shape.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
-                for (let i = 1; i < cmd.points.length; i++) {
-                    shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
-                }
-                shape.closePath();
+                try {
+                    const shape = new THREE.Shape();
+                    shape.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
+                    for (let i = 1; i < cmd.points.length; i++) {
+                        shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
+                    }
+                    shape.closePath();
 
-                const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.z = zPos;
-                this.pcbMesh.add(mesh);
+                    const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.position.z = zPos;
+                    this.pcbMesh.add(mesh);
+                } catch (e) {
+                    // Skip invalid shapes
+                }
             } else if (cmd.type === 'flash') {
-                const ap = cmd.aperture;
-                let geometry;
-
-                if (ap.type === 'C') {
-                    geometry = new THREE.CylinderGeometry(ap.params[0] / 2, ap.params[0] / 2, thickness, 16);
-                } else if (ap.type === 'R') {
-                    const w = ap.params[0] || 0.5;
-                    const h = ap.params.length > 1 ? ap.params[1] : w;
-                    geometry = new THREE.BoxGeometry(w, h, thickness);
-                } else {
-                    geometry = new THREE.CylinderGeometry(0.25, 0.25, thickness, 16);
-                }
-
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.set(cmd.x - cx, cmd.y - cy, zPos + thickness / 2);
-                if (ap.type === 'C') mesh.rotation.x = Math.PI / 2;
-                this.pcbMesh.add(mesh);
+                this.addFlash3D(cmd, cx, cy, zPos, thickness, material);
             } else if (cmd.type === 'line') {
-                const dx = cmd.x2 - cmd.x1;
-                const dy = cmd.y2 - cmd.y1;
-                const length = Math.sqrt(dx * dx + dy * dy);
-                const angle = Math.atan2(dy, dx);
+                this.addLine3D(cmd, cx, cy, zPos, thickness, material);
+            } else if (cmd.type === 'arc') {
+                this.addArc3D(cmd, cx, cy, zPos, thickness, material);
+            }
+        }
+    }
 
-                const geometry = new THREE.BoxGeometry(length, cmd.width || 0.1, thickness);
+    addFlash3D(cmd, cx, cy, zPos, thickness, material) {
+        const ap = cmd.aperture;
+        const x = cmd.x - cx;
+        const y = cmd.y - cy;
+        let mesh;
+
+        if (ap.type === 'C') {
+            // Circle
+            const radius = (ap.params[0] || 0.5) / 2;
+            const geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, zPos + thickness / 2);
+            mesh.rotation.x = Math.PI / 2;
+        } else if (ap.type === 'R') {
+            // Rectangle
+            const w = ap.params[0] || 0.5;
+            const h = ap.params.length > 1 ? ap.params[1] : w;
+            const geometry = new THREE.BoxGeometry(w, h, thickness);
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, zPos + thickness / 2);
+            if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+        } else if (ap.type === 'O') {
+            // Obround - create as rounded rectangle using shape
+            const w = ap.params[0] || 0.5;
+            const h = ap.params.length > 1 ? ap.params[1] : w;
+            const r = Math.min(w, h) / 2;
+
+            const shape = new THREE.Shape();
+            if (w > h) {
+                const dx = (w - h) / 2;
+                shape.moveTo(-dx, -r);
+                shape.lineTo(dx, -r);
+                shape.absarc(dx, 0, r, -Math.PI/2, Math.PI/2, false);
+                shape.lineTo(-dx, r);
+                shape.absarc(-dx, 0, r, Math.PI/2, -Math.PI/2, false);
+            } else {
+                const dy = (h - w) / 2;
+                shape.moveTo(r, -dy);
+                shape.lineTo(r, dy);
+                shape.absarc(0, dy, r, 0, Math.PI, false);
+                shape.lineTo(-r, -dy);
+                shape.absarc(0, -dy, r, Math.PI, 0, false);
+            }
+            shape.closePath();
+
+            const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, zPos);
+            if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+        } else if (ap.type === 'P') {
+            // Polygon
+            const od = ap.params[0] || 0.5;
+            const vertices = ap.params[1] || 4;
+            const pRot = (ap.params[2] || 0) * Math.PI / 180;
+
+            const shape = new THREE.Shape();
+            for (let i = 0; i < vertices; i++) {
+                const angle = pRot + (i * 2 * Math.PI / vertices);
+                const px = (od / 2) * Math.cos(angle);
+                const py = (od / 2) * Math.sin(angle);
+                if (i === 0) shape.moveTo(px, py);
+                else shape.lineTo(px, py);
+            }
+            shape.closePath();
+
+            const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, zPos);
+        } else if (ap.type === 'POLY' && ap.vertices) {
+            // Custom polygon from macro
+            const shape = new THREE.Shape();
+            shape.moveTo(ap.vertices[0].x, ap.vertices[0].y);
+            for (let i = 1; i < ap.vertices.length; i++) {
+                shape.lineTo(ap.vertices[i].x, ap.vertices[i].y);
+            }
+            shape.closePath();
+
+            const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, zPos);
+        } else {
+            // Fallback to circle
+            const geometry = new THREE.CylinderGeometry(0.25, 0.25, thickness, 16);
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, zPos + thickness / 2);
+            mesh.rotation.x = Math.PI / 2;
+        }
+
+        if (mesh) this.pcbMesh.add(mesh);
+    }
+
+    addLine3D(cmd, cx, cy, zPos, thickness, material) {
+        const dx = cmd.x2 - cmd.x1;
+        const dy = cmd.y2 - cmd.y1;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        if (length < 0.001) return;
+
+        const angle = Math.atan2(dy, dx);
+        const width = cmd.width || 0.1;
+
+        // Create rounded line using shape for better visual
+        const shape = new THREE.Shape();
+        const halfW = width / 2;
+        const halfL = length / 2;
+
+        // Rounded rectangle
+        shape.moveTo(-halfL, -halfW);
+        shape.lineTo(halfL, -halfW);
+        shape.absarc(halfL, 0, halfW, -Math.PI/2, Math.PI/2, false);
+        shape.lineTo(-halfL, halfW);
+        shape.absarc(-halfL, 0, halfW, Math.PI/2, -Math.PI/2, false);
+        shape.closePath();
+
+        const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, zPos);
+        mesh.rotation.z = angle;
+        this.pcbMesh.add(mesh);
+    }
+
+    addArc3D(cmd, cx, cy, zPos, thickness, material) {
+        // Convert arc to line segments for 3D
+        const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+        let px = cmd.x1, py = cmd.y1;
+
+        for (const p of pts) {
+            const dx = p.x - px;
+            const dy = p.y - py;
+            const length = Math.sqrt(dx * dx + dy * dy);
+
+            if (length > 0.001) {
+                const angle = Math.atan2(dy, dx);
+                const width = cmd.width || 0.1;
+
+                const geometry = new THREE.BoxGeometry(length + width, width, thickness);
                 const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.set((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, zPos + thickness / 2);
+                mesh.position.set((px + p.x) / 2 - cx, (py + p.y) / 2 - cy, zPos + thickness / 2);
                 mesh.rotation.z = angle;
                 this.pcbMesh.add(mesh);
             }
+
+            px = p.x;
+            py = p.y;
         }
     }
 
@@ -1905,7 +2113,7 @@ class GerberViewer {
         const material = new THREE.MeshPhongMaterial({
             color,
             transparent: true,
-            opacity: 0.85,
+            opacity: 0.78,
             side: THREE.DoubleSide
         });
 
@@ -1927,93 +2135,151 @@ class GerberViewer {
         const svgWidth = (bw + padding * 2) * scale;
         const svgHeight = (bh + padding * 2) * scale;
 
-        let svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">
-<defs>
-    <style>
-        .copper { fill: ${this.colors.copper}; stroke: none; }
-        .mask { fill: ${this.colors.mask}; stroke: none; opacity: 0.78; }
-        .silk { fill: ${this.colors.silk}; stroke: none; }
-        .outline { fill: none; stroke: #facc15; stroke-width: 1.5; }
-        .drill { fill: ${this.colors.bg}; stroke: ${this.colors.copper}; stroke-width: 1.5; }
-        .fr4 { fill: ${this.colors.fr4}; stroke: none; }
-        .inner { fill: #cd7f32; stroke: none; }
-    </style>
-</defs>
-<rect width="100%" height="100%" fill="${this.colors.bg}"/>
-<g transform="translate(${padding * scale}, ${(bh + padding) * scale}) scale(${scale}, ${-scale})">
-`;
+        const lines = [];
+        lines.push('<?xml version="1.0" encoding="UTF-8"?>');
+        lines.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">`);
+        lines.push('<defs>');
+        lines.push('  <style>');
+        lines.push(`    .copper { fill: ${this.colors.copper}; stroke: none; }`);
+        lines.push(`    .mask { fill: ${this.colors.mask}; stroke: none; opacity: 0.78; }`);
+        lines.push(`    .silk { fill: ${this.colors.silk}; stroke: none; }`);
+        lines.push('    .outline { fill: none; stroke: #facc15; stroke-width: 0.15; }');
+        lines.push(`    .drill { fill: ${this.colors.bg}; stroke: ${this.colors.copper}; stroke-width: 0.15; }`);
+        lines.push(`    .fr4 { fill: ${this.colors.fr4}; stroke: none; }`);
+        lines.push('    .inner { fill: #cd7f32; stroke: none; }');
+        lines.push('  </style>');
+        lines.push('</defs>');
+        lines.push(`<rect width="100%" height="100%" fill="${this.colors.bg}"/>`);
+        lines.push(`<g transform="translate(${padding * scale}, ${(bh + padding) * scale}) scale(${scale}, ${-scale})">`);
 
         // FR4 background
         if (this.boardOutline?.length >= 3) {
-            svg += `<path class="fr4" d="M ${this.boardOutline.map((p, i) =>
-                `${i === 0 ? 'M' : 'L'} ${(p.x - this.bounds.minX).toFixed(3)} ${(p.y - this.bounds.minY).toFixed(3)}`
-            ).join(' ')} Z"/>\\n`;
+            const pathData = this.boardOutline.map((p, i) =>
+                `${i === 0 ? 'M' : 'L'}${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`
+            ).join(' ') + ' Z';
+            lines.push(`  <path class="fr4" d="${pathData}"/>`);
         }
 
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
 
         for (const layer of sorted) {
             if (!layer.visible) continue;
+            if (layer.type === 'outline') continue; // Outline rendered separately
 
             const layerClass = layer.type === 'inner' ? 'inner' : layer.type;
-            svg += `<g class="${layerClass}" id="layer-${layer.name.replace(/[^a-zA-Z0-9]/g, '_')}">\\n`;
+            const layerId = layer.name.replace(/[^a-zA-Z0-9]/g, '_');
+            lines.push(`  <g class="${layerClass}" id="layer-${layerId}" fill="${layer.color}">`);
 
             for (const cmd of layer.cmds) {
                 if (cmd.polarity === 'clear') continue;
 
                 if (cmd.type === 'region' && cmd.points.length >= 3) {
-                    const path = cmd.points.map((p, i) =>
-                        `${i === 0 ? 'M' : 'L'} ${(p.x - this.bounds.minX).toFixed(3)} ${(p.y - this.bounds.minY).toFixed(3)}`
-                    ).join(' ');
-                    svg += `  <path d="${path} Z"/>\\n`;
+                    const pathData = cmd.points.map((p, i) =>
+                        `${i === 0 ? 'M' : 'L'}${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`
+                    ).join(' ') + ' Z';
+                    lines.push(`    <path d="${pathData}"/>`);
                 } else if (cmd.type === 'line') {
-                    svg += `  <line x1="${(cmd.x1 - this.bounds.minX).toFixed(3)}" y1="${(cmd.y1 - this.bounds.minY).toFixed(3)}" x2="${(cmd.x2 - this.bounds.minX).toFixed(3)}" y2="${(cmd.y2 - this.bounds.minY).toFixed(3)}" stroke="${layer.color}" stroke-width="${cmd.width || 0.1}" stroke-linecap="round"/>\\n`;
-                } else if (cmd.type === 'flash') {
-                    const x = cmd.x - this.bounds.minX;
-                    const y = cmd.y - this.bounds.minY;
-                    const ap = cmd.aperture;
-
-                    if (ap.type === 'C') {
-                        svg += `  <circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="${((ap.params[0] || 0.5) / 2).toFixed(3)}"/>\\n`;
-                    } else if (ap.type === 'R') {
-                        const w = ap.params[0] || 0.5;
-                        const h = ap.params.length > 1 ? ap.params[1] : w;
-                        svg += `  <rect x="${(x - w/2).toFixed(3)}" y="${(y - h/2).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}"/>\\n`;
-                    } else if (ap.type === 'O') {
-                        const w = ap.params[0] || 0.5;
-                        const h = ap.params.length > 1 ? ap.params[1] : w;
-                        svg += `  <rect x="${(x - w/2).toFixed(3)}" y="${(y - h/2).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}" rx="${(Math.min(w, h) / 2).toFixed(3)}"/>\\n`;
+                    const x1 = (cmd.x1 - this.bounds.minX).toFixed(3);
+                    const y1 = (cmd.y1 - this.bounds.minY).toFixed(3);
+                    const x2 = (cmd.x2 - this.bounds.minX).toFixed(3);
+                    const y2 = (cmd.y2 - this.bounds.minY).toFixed(3);
+                    const w = (cmd.width || 0.1).toFixed(3);
+                    lines.push(`    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${layer.color}" stroke-width="${w}" stroke-linecap="round" fill="none"/>`);
+                } else if (cmd.type === 'arc') {
+                    // Convert arc to polyline
+                    const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
+                    const pathParts = [`M${(cmd.x1 - this.bounds.minX).toFixed(3)},${(cmd.y1 - this.bounds.minY).toFixed(3)}`];
+                    for (const p of pts) {
+                        pathParts.push(`L${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`);
                     }
+                    const w = (cmd.width || 0.1).toFixed(3);
+                    lines.push(`    <path d="${pathParts.join(' ')}" stroke="${layer.color}" stroke-width="${w}" stroke-linecap="round" fill="none"/>`);
+                } else if (cmd.type === 'flash') {
+                    lines.push(this.flashToSvg(cmd, layer.color));
                 } else if (cmd.type === 'drill') {
-                    const x = cmd.x - this.bounds.minX;
-                    const y = cmd.y - this.bounds.minY;
-                    svg += `  <circle class="drill" cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="${(cmd.diameter / 2).toFixed(3)}"/>\\n`;
+                    const x = (cmd.x - this.bounds.minX).toFixed(3);
+                    const y = (cmd.y - this.bounds.minY).toFixed(3);
+                    const r = (cmd.diameter / 2).toFixed(3);
+                    lines.push(`    <circle class="drill" cx="${x}" cy="${y}" r="${r}"/>`);
+                } else if (cmd.type === 'slot') {
+                    const x1 = (cmd.x1 - this.bounds.minX).toFixed(3);
+                    const y1 = (cmd.y1 - this.bounds.minY).toFixed(3);
+                    const x2 = (cmd.x2 - this.bounds.minX).toFixed(3);
+                    const y2 = (cmd.y2 - this.bounds.minY).toFixed(3);
+                    const w = cmd.diameter.toFixed(3);
+                    lines.push(`    <line class="drill" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${this.colors.bg}" stroke-width="${w}" stroke-linecap="round"/>`);
                 }
             }
 
-            svg += `</g>\\n`;
+            lines.push('  </g>');
         }
 
         // Board outline
         if (this.boardOutline?.length >= 3) {
             const olLayer = this.layers.find(l => l.type === 'outline');
             if (olLayer?.visible) {
-                svg += `<path class="outline" d="M ${this.boardOutline.map((p, i) =>
-                    `${i === 0 ? 'M' : 'L'} ${(p.x - this.bounds.minX).toFixed(3)} ${(p.y - this.bounds.minY).toFixed(3)}`
-                ).join(' ')} Z"/>\\n`;
+                const pathData = this.boardOutline.map((p, i) =>
+                    `${i === 0 ? 'M' : 'L'}${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`
+                ).join(' ') + ' Z';
+                lines.push(`  <path class="outline" d="${pathData}"/>`);
             }
         }
 
-        svg += `</g>\\n</svg>`;
+        lines.push('</g>');
+        lines.push('</svg>');
 
         // Download
+        const svg = lines.join('\n');
         const blob = new Blob([svg], { type: 'image/svg+xml' });
         const a = document.createElement('a');
         a.download = 'pcb.svg';
         a.href = URL.createObjectURL(blob);
         a.click();
         URL.revokeObjectURL(a.href);
+    }
+
+    flashToSvg(cmd, color) {
+        const x = cmd.x - this.bounds.minX;
+        const y = cmd.y - this.bounds.minY;
+        const ap = cmd.aperture;
+        const rot = ap.rotation || 0;
+
+        if (ap.type === 'C') {
+            const r = ((ap.params[0] || 0.5) / 2).toFixed(3);
+            return `    <circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="${r}"/>`;
+        } else if (ap.type === 'R') {
+            const w = ap.params[0] || 0.5;
+            const h = ap.params.length > 1 ? ap.params[1] : w;
+            if (rot) {
+                return `    <rect x="${(-w/2).toFixed(3)}" y="${(-h/2).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}" transform="translate(${x.toFixed(3)},${y.toFixed(3)}) rotate(${rot})"/>`;
+            }
+            return `    <rect x="${(x - w/2).toFixed(3)}" y="${(y - h/2).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}"/>`;
+        } else if (ap.type === 'O') {
+            const w = ap.params[0] || 0.5;
+            const h = ap.params.length > 1 ? ap.params[1] : w;
+            const r = Math.min(w, h) / 2;
+            if (rot) {
+                return `    <rect x="${(-w/2).toFixed(3)}" y="${(-h/2).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}" rx="${r.toFixed(3)}" transform="translate(${x.toFixed(3)},${y.toFixed(3)}) rotate(${rot})"/>`;
+            }
+            return `    <rect x="${(x - w/2).toFixed(3)}" y="${(y - h/2).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}" rx="${r.toFixed(3)}"/>`;
+        } else if (ap.type === 'P') {
+            const od = ap.params[0] || 0.5;
+            const vertices = ap.params[1] || 4;
+            const pRot = (ap.params[2] || 0) * Math.PI / 180;
+            const pts = [];
+            for (let i = 0; i < vertices; i++) {
+                const angle = pRot + (i * 2 * Math.PI / vertices);
+                const px = x + (od / 2) * Math.cos(angle);
+                const py = y + (od / 2) * Math.sin(angle);
+                pts.push(`${px.toFixed(3)},${py.toFixed(3)}`);
+            }
+            return `    <polygon points="${pts.join(' ')}"/>`;
+        } else if (ap.type === 'POLY' && ap.vertices) {
+            const pts = ap.vertices.map(v => `${(x + v.x).toFixed(3)},${(y + v.y).toFixed(3)}`);
+            return `    <polygon points="${pts.join(' ')}"/>`;
+        }
+        // Fallback
+        return `    <circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="0.25"/>`;
     }
 
     updateUI() {
