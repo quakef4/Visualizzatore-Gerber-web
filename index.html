@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gerber Viewer Pro v22</title>
+    <title>Gerber Viewer Pro v23</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         :root { --bg:#0c0c0c; --panel:#141414; --surface:#1e1e1e; --border:#2a2a2a; --text:#e0e0e0; --text2:#666; --accent:#22c55e; }
@@ -17,10 +17,13 @@
         .header-actions { display:flex; gap:8px; }
         .btn { padding:8px 16px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:13px; cursor:pointer; transition:all .2s; }
         .btn:hover { border-color:var(--accent); color:var(--accent); }
+        .btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
         .sidebar { background:var(--panel); border-right:1px solid var(--border); overflow-y:auto; }
         .panel { border-bottom:1px solid var(--border); }
-        .panel-header { padding:14px 16px; font-size:11px; font-weight:600; text-transform:uppercase; color:var(--accent); background:rgba(34,197,94,.08); }
+        .panel-header { padding:14px 16px; font-size:11px; font-weight:600; text-transform:uppercase; color:var(--accent); background:rgba(34,197,94,.08); cursor:pointer; display:flex; justify-content:space-between; align-items:center; }
+        .panel-header:hover { background:rgba(34,197,94,.12); }
         .panel-body { padding:14px 16px; }
+        .panel.collapsed .panel-body { display:none; }
         .dropzone { border:2px dashed var(--border); border-radius:10px; padding:24px 16px; text-align:center; cursor:pointer; transition:all .2s; }
         .dropzone:hover,.dropzone.over { border-color:var(--accent); background:rgba(34,197,94,.08); }
         .dropzone input { display:none; }
@@ -35,6 +38,7 @@
         .file-tag.silk { background:#525252; color:#fff; }
         .file-tag.drill { background:#1d4ed8; color:#dbeafe; }
         .file-tag.outline { background:#a16207; color:#fef9c3; }
+        .file-tag.inner { background:#7c3aed; color:#ede9fe; }
         .file-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .file-del { background:none; border:none; color:var(--text2); cursor:pointer; padding:4px 8px; border-radius:4px; }
         .file-del:hover { background:rgba(239,68,68,.2); color:#ef4444; }
@@ -52,6 +56,7 @@
         .view-section { margin-bottom:14px; }
         .view-label { font-size:10px; color:var(--text2); margin-bottom:8px; text-transform:uppercase; }
         .view-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+        .view-grid-2 { display:grid; grid-template-columns:repeat(2,1fr); gap:6px; }
         .view-btn { padding:10px 8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; transition:all .15s; }
         .view-btn:hover { border-color:var(--text); color:var(--text); }
         .view-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
@@ -59,6 +64,13 @@
         .copper-btn { width:100%; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; }
         .copper-btn:hover { border-color:#f59e0b; color:#f59e0b; }
         .copper-btn.active { background:#b45309; color:#fff; border-color:#b45309; }
+        .finish-toggle { margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+        .finish-label { font-size:11px; color:var(--text2); margin-bottom:8px; }
+        .finish-btns { display:flex; gap:6px; }
+        .finish-btn { flex:1; padding:8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; }
+        .finish-btn:hover { border-color:#d4af37; color:#d4af37; }
+        .finish-btn.active[data-finish="gold"] { background:#d4af37; color:#000; border-color:#d4af37; }
+        .finish-btn.active[data-finish="silver"] { background:#c0c0c0; color:#000; border-color:#c0c0c0; }
         .color-presets { display:flex; gap:8px; flex-wrap:wrap; }
         .color-preset { width:40px; height:40px; border-radius:8px; border:2px solid transparent; cursor:pointer; }
         .color-preset:hover { transform:scale(1.1); }
@@ -77,9 +89,10 @@
         .drill-table th { text-align:left; padding:8px; background:var(--surface); color:var(--text2); }
         .drill-table td { padding:8px; border-bottom:1px solid var(--border); }
         main { display:flex; flex-direction:column; background:var(--bg); }
-        .toolbar { display:flex; align-items:center; gap:6px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--border); }
+        .toolbar { display:flex; align-items:center; gap:6px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap; }
         .tool-btn { width:34px; height:34px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; }
         .tool-btn:hover { border-color:var(--accent); color:var(--accent); }
+        .tool-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
         .tool-sep { width:1px; height:24px; background:var(--border); margin:0 4px; }
         .zoom-display { font-size:12px; color:var(--text); min-width:55px; text-align:center; }
         .canvas-container { flex:1; position:relative; overflow:hidden; }
@@ -91,24 +104,67 @@
         .loading.show { display:grid; }
         .spinner { width:44px; height:44px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
         @keyframes spin { to { transform:rotate(360deg); } }
+        .measure-info { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--accent); border-radius:8px; padding:12px 20px; font-size:13px; display:none; z-index:50; text-align:center; min-width:280px; }
+        .measure-info.show { display:block; }
+        .measure-value { color:var(--accent); font-weight:700; font-size:16px; }
+        .drc-panel { position:fixed; right:20px; top:70px; width:320px; background:var(--panel); border:1px solid var(--border); border-radius:10px; z-index:200; display:none; max-height:calc(100vh - 100px); overflow-y:auto; }
+        .drc-panel.show { display:block; }
+        .drc-header { padding:14px 16px; background:rgba(239,68,68,.1); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+        .drc-title { font-weight:600; color:#ef4444; }
+        .drc-close { background:none; border:none; color:var(--text2); cursor:pointer; font-size:18px; }
+        .drc-body { padding:14px 16px; }
+        .drc-item { padding:10px; background:var(--surface); border-radius:6px; margin-bottom:8px; font-size:12px; border-left:3px solid #ef4444; }
+        .drc-item.warning { border-left-color:#f59e0b; }
+        .drc-item.info { border-left-color:#3b82f6; }
+        .drc-item-title { font-weight:600; margin-bottom:4px; }
+        .drc-item-desc { color:var(--text2); }
+        .drc-summary { padding:12px; background:var(--surface); border-radius:6px; margin-bottom:12px; }
+        .drc-summary-title { font-size:11px; color:var(--text2); margin-bottom:6px; }
+        .drc-counts { display:flex; gap:16px; }
+        .drc-count { text-align:center; }
+        .drc-count-num { font-size:20px; font-weight:700; }
+        .drc-count-label { font-size:10px; color:var(--text2); }
+        .drc-count.error .drc-count-num { color:#ef4444; }
+        .drc-count.warning .drc-count-num { color:#f59e0b; }
+        .drc-count.ok .drc-count-num { color:var(--accent); }
+        .dropdown { position:relative; display:inline-block; }
+        .dropdown-content { display:none; position:absolute; top:100%; left:0; background:var(--panel); border:1px solid var(--border); border-radius:6px; min-width:160px; z-index:100; margin-top:4px; }
+        .dropdown:hover .dropdown-content { display:block; }
+        .dropdown-item { padding:10px 14px; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:8px; }
+        .dropdown-item:hover { background:rgba(34,197,94,.1); color:var(--accent); }
+        .netlist-panel { position:fixed; right:20px; top:70px; width:360px; background:var(--panel); border:1px solid var(--border); border-radius:10px; z-index:200; display:none; max-height:calc(100vh - 100px); overflow-y:auto; }
+        .netlist-panel.show { display:block; }
+        .netlist-header { padding:14px 16px; background:rgba(34,197,94,.08); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+        .netlist-title { font-weight:600; color:var(--accent); }
+        .net-item { padding:10px 16px; border-bottom:1px solid var(--border); font-size:12px; cursor:pointer; }
+        .net-item:hover { background:rgba(34,197,94,.05); }
+        .net-name { font-weight:600; color:var(--accent); }
+        .net-pads { color:var(--text2); margin-top:4px; }
     </style>
 </head>
 <body>
 <div class="app">
     <header>
-        <div class="logo"><div class="logo-icon">◫</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v22</small></div>
+        <div class="logo"><div class="logo-icon">&#9643;</div>Gerber<span>Viewer</span><small style="color:var(--text2);margin-left:8px">v23</small></div>
         <div class="header-actions">
-            <button class="btn" id="btnClear">🗑️ Pulisci</button>
-            <button class="btn" id="btnExport">📷 Esporta</button>
+            <button class="btn" id="btnDRC">&#128269; DRC</button>
+            <button class="btn" id="btnNetlist">&#128279; Netlist</button>
+            <div class="dropdown">
+                <button class="btn" id="btnExport">&#128190; Esporta &#9662;</button>
+                <div class="dropdown-content">
+                    <div class="dropdown-item" id="exportPng">&#128247; PNG</div>
+                </div>
+            </div>
+            <button class="btn" id="btnClear">&#128465; Pulisci</button>
         </div>
     </header>
-    
+
     <aside class="sidebar">
         <div class="panel">
-            <div class="panel-header">📁 File Gerber</div>
+            <div class="panel-header">&#128193; File Gerber</div>
             <div class="panel-body">
                 <div class="dropzone" id="dropzone">
-                    <div class="dropzone-icon">📂</div>
+                    <div class="dropzone-icon">&#128194;</div>
                     <div class="dropzone-title">Trascina file o clicca</div>
                     <div class="dropzone-subtitle">Gerber, Excellon, ZIP</div>
                     <input type="file" id="fileInput" multiple>
@@ -116,20 +172,20 @@
                 <div class="file-list" id="fileList"></div>
             </div>
         </div>
-        
+
         <div class="panel">
-            <div class="panel-header">🗂️ Layer (<span id="layerCount">0</span>)</div>
+            <div class="panel-header">&#128450; Layer (<span id="layerCount">0</span>)</div>
             <div class="panel-body">
                 <div class="layer-list" id="layerList"></div>
                 <div class="layer-actions">
-                    <button class="btn" id="btnShowAll">👁 Tutti</button>
-                    <button class="btn" id="btnHideAll">👁‍🗨 Nessuno</button>
+                    <button class="btn" id="btnShowAll">&#128065; Tutti</button>
+                    <button class="btn" id="btnHideAll">&#128683; Nessuno</button>
                 </div>
             </div>
         </div>
-        
+
         <div class="panel">
-            <div class="panel-header">👁 Vista</div>
+            <div class="panel-header">&#128065; Vista</div>
             <div class="panel-body">
                 <div class="view-section">
                     <div class="view-label">Lato</div>
@@ -139,22 +195,21 @@
                         <button class="view-btn" data-view="all">Tutti</button>
                     </div>
                 </div>
-                <div class="view-section">
-                    <div class="view-label">Rotazione</div>
-                    <div class="view-grid">
-                        <button class="view-btn" data-rot="0">0°</button>
-                        <button class="view-btn" data-rot="90">90°</button>
-                        <button class="view-btn" data-rot="180">180°</button>
-                    </div>
-                </div>
                 <div class="copper-toggle">
-                    <button class="copper-btn" id="btnCopperOnly">🔶 Solo Rame</button>
+                    <button class="copper-btn" id="btnCopperOnly">&#128310; Solo Rame</button>
+                </div>
+                <div class="finish-toggle">
+                    <div class="finish-label">Finitura</div>
+                    <div class="finish-btns">
+                        <button class="finish-btn active" id="btnFinishGold" data-finish="gold">&#127793; Oro</button>
+                        <button class="finish-btn" id="btnFinishSilver" data-finish="silver">&#11093; Argento</button>
+                    </div>
                 </div>
             </div>
         </div>
-        
+
         <div class="panel">
-            <div class="panel-header">🎨 Colori PCB</div>
+            <div class="panel-header">&#127912; Colori PCB</div>
             <div class="panel-body">
                 <div class="color-presets">
                     <div class="color-preset preset-green active" data-mask="#14532d" data-silk="#f5f5f4" title="Verde"></div>
@@ -166,42 +221,83 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="panel">
-            <div class="panel-header">📊 Statistiche</div>
+            <div class="panel-header">&#128200; Statistiche</div>
             <div class="panel-body">
                 <div class="stats-grid">
                     <div class="stat-item"><div class="stat-label">Dimensione</div><div class="stat-value" id="statSize">-</div></div>
                     <div class="stat-item"><div class="stat-label">Fori</div><div class="stat-value" id="statHoles">-</div></div>
+                    <div class="stat-item"><div class="stat-label">Layer</div><div class="stat-value" id="statLayers">-</div></div>
+                    <div class="stat-item"><div class="stat-label">Net</div><div class="stat-value" id="statNets">-</div></div>
                 </div>
                 <table class="drill-table" id="drillTable" style="display:none">
-                    <thead><tr><th>Tool</th><th>Ø mm</th><th>Qty</th></tr></thead>
+                    <thead><tr><th>Tool</th><th>&#216; mm</th><th>Qty</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
         </div>
     </aside>
-    
+
     <main>
         <div class="toolbar">
             <button class="tool-btn" id="btnZoomIn" title="Zoom +">+</button>
-            <button class="tool-btn" id="btnZoomOut" title="Zoom -">−</button>
-            <button class="tool-btn" id="btnFit" title="Adatta">⊡</button>
+            <button class="tool-btn" id="btnZoomOut" title="Zoom -">&#8722;</button>
+            <button class="tool-btn" id="btnFit" title="Adatta">&#8865;</button>
             <span class="zoom-display" id="zoomDisplay">100%</span>
             <div class="tool-sep"></div>
-            <button class="tool-btn" id="btnFlipH" title="Specchia H">↔</button>
-            <button class="tool-btn" id="btnFlipV" title="Specchia V">↕</button>
+            <button class="tool-btn" id="btnFlipH" title="Specchia H">&#8596;</button>
+            <button class="tool-btn" id="btnFlipV" title="Specchia V">&#8597;</button>
+            <div class="tool-sep"></div>
+            <button class="tool-btn" id="btnRot0" title="Rotazione 0°">0°</button>
+            <button class="tool-btn" id="btnRot90" title="Rotazione 90°">90°</button>
+            <button class="tool-btn" id="btnRot180" title="Rotazione 180°">180°</button>
+            <button class="tool-btn" id="btnRot270" title="Rotazione 270°">270°</button>
+            <div class="tool-sep"></div>
+            <button class="tool-btn" id="btnMeasure" title="Misura distanza">&#128207;</button>
+            <button class="tool-btn" id="btnSnap" title="Snap a fori/pad">&#127919;</button>
         </div>
         <div class="canvas-container" id="canvasContainer">
-            <canvas id="canvas2d" style="display:none"></canvas>
+            <canvas id="canvas2d"></canvas>
             <div class="empty-state" id="emptyState">
-                <div class="empty-icon">◫</div>
+                <div class="empty-icon">&#9643;</div>
                 <div class="empty-title">Carica file Gerber</div>
                 <div>Trascina file o usa il pannello laterale</div>
             </div>
             <div class="loading" id="loading"><div class="spinner"></div></div>
+            <div class="measure-info" id="measureInfo">
+                <div>Distanza: <span class="measure-value" id="measureValue">0.00 mm</span></div>
+                <div style="font-size:11px;color:var(--text2);margin-top:4px" id="measureDetails"></div>
+                <div style="font-size:10px;color:var(--text2);margin-top:6px">Click: punto | Shift+trascina: sposta | Dx/ESC: annulla</div>
+            </div>
         </div>
     </main>
+</div>
+
+<div class="drc-panel" id="drcPanel">
+    <div class="drc-header">
+        <span class="drc-title">&#128269; Design Rule Check</span>
+        <button class="drc-close" id="drcClose">&#10005;</button>
+    </div>
+    <div class="drc-body" id="drcBody">
+        <div class="drc-summary">
+            <div class="drc-summary-title">Riepilogo</div>
+            <div class="drc-counts">
+                <div class="drc-count error"><div class="drc-count-num" id="drcErrors">0</div><div class="drc-count-label">Errori</div></div>
+                <div class="drc-count warning"><div class="drc-count-num" id="drcWarnings">0</div><div class="drc-count-label">Avvisi</div></div>
+                <div class="drc-count ok"><div class="drc-count-num" id="drcOk">0</div><div class="drc-count-label">OK</div></div>
+            </div>
+        </div>
+        <div id="drcResults"></div>
+    </div>
+</div>
+
+<div class="netlist-panel" id="netlistPanel">
+    <div class="netlist-header">
+        <span class="netlist-title">&#128279; Netlist</span>
+        <button class="drc-close" id="netlistClose">&#10005;</button>
+    </div>
+    <div id="netlistBody"></div>
 </div>
 
 <script>
@@ -219,24 +315,51 @@ class GerberViewer {
         this.rotation = 0;
         this.flipH = false;
         this.flipV = false;
-        this.colors = { bg:'#0c0c0c', mask:'#14532d', silk:'#f5f5f4', copper:'#b45309' };
+        this.colors = { bg:'#0c0c0c', mask:'#14532d', silk:'#f5f5f4', copper:'#b45309', fr4:'#c19a6b' };
         this.copperOnly = false;
-        
+        this.currentView = 'top';
+
+        // Surface finish colors (applied to exposed pads)
+        this.surfaceFinish = 'gold'; // none, gold, silver
+        this.surfaceFinishVisible = true; // visibility toggle from layer panel
+        this.finishColors = {
+            gold: '#d4af37',   // Gold ENIG
+            silver: '#c0c0c0' // Silver immersion
+        };
+
+        // Measure tool
+        this.measuring = false;
+        this.measureStart = null;
+        this.measureEnd = null;
+        this.tempMeasureEnd = null;
+        this.snapMode = false;
+        this.snapDistance = 1.5; // Snap distance in mm
+
+        // Gerber X2 attributes
+        this.x2Attributes = {};
+
+        // Netlist
+        this.nets = [];
+        this.pads = [];
+
+        // DRC results
+        this.drcResults = [];
+
         this.setupEvents();
     }
-    
+
     setupEvents() {
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');
-        
+
         dropzone.onclick = () => fileInput.click();
         dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('over'); };
         dropzone.ondragleave = () => dropzone.classList.remove('over');
         dropzone.ondrop = e => { e.preventDefault(); dropzone.classList.remove('over'); this.loadFiles(e.dataTransfer.files); };
         fileInput.onchange = () => this.loadFiles(fileInput.files);
-        
+
         document.getElementById('btnClear').onclick = () => this.clear();
-        document.getElementById('btnExport').onclick = () => this.exportPng();
+        document.getElementById('exportPng').onclick = () => this.exportPng();
         document.getElementById('btnShowAll').onclick = () => this.setAllLayersVisible(true);
         document.getElementById('btnHideAll').onclick = () => this.setAllLayersVisible(false);
         document.getElementById('btnZoomIn').onclick = () => this.setZoom(this.zoom*1.3);
@@ -244,13 +367,54 @@ class GerberViewer {
         document.getElementById('btnFit').onclick = () => this.fit();
         document.getElementById('btnFlipH').onclick = () => { this.flipH=!this.flipH; this.render(); };
         document.getElementById('btnFlipV').onclick = () => { this.flipV=!this.flipV; this.render(); };
-        
+
+        document.getElementById('btnMeasure').onclick = () => {
+            this.measuring = !this.measuring;
+            document.getElementById('btnMeasure').classList.toggle('active', this.measuring);
+            this.canvas2d.style.cursor = this.measuring ? 'crosshair' : 'grab';
+            if (!this.measuring) {
+                this.measureStart = null;
+                this.measureEnd = null;
+                document.getElementById('measureInfo').classList.remove('show');
+                this.render();
+            }
+        };
+
+        document.getElementById('btnSnap').onclick = () => {
+            this.snapMode = !this.snapMode;
+            document.getElementById('btnSnap').classList.toggle('active', this.snapMode);
+        };
+
+        document.getElementById('btnDRC').onclick = () => {
+            this.runDRC();
+            document.getElementById('drcPanel').classList.toggle('show');
+        };
+        document.getElementById('drcClose').onclick = () => document.getElementById('drcPanel').classList.remove('show');
+
+        document.getElementById('btnNetlist').onclick = () => {
+            this.updateNetlistPanel();
+            document.getElementById('netlistPanel').classList.toggle('show');
+        };
+        document.getElementById('netlistClose').onclick = () => document.getElementById('netlistPanel').classList.remove('show');
+
         document.getElementById('btnCopperOnly').onclick = () => {
             this.copperOnly = !this.copperOnly;
             document.getElementById('btnCopperOnly').classList.toggle('active', this.copperOnly);
             this.render();
         };
-        
+
+        // Finish quick selection buttons
+        document.querySelectorAll('.finish-btn[data-finish]').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.finish-btn[data-finish]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.surfaceFinish = btn.dataset.finish;
+                this.surfaceFinishVisible = true;
+                this.updateLayerList();
+                this.render();
+            };
+        });
+
         document.querySelectorAll('.view-btn[data-view]').forEach(btn => {
             btn.onclick = () => {
                 document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
@@ -258,16 +422,24 @@ class GerberViewer {
                 this.setView(btn.dataset.view);
             };
         });
-        
-        document.querySelectorAll('.view-btn[data-rot]').forEach(btn => {
-            btn.onclick = () => {
-                document.querySelectorAll('.view-btn[data-rot]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.rotation = parseInt(btn.dataset.rot);
+
+        // Rotation buttons in toolbar
+        const rotButtons = [
+            { id: 'btnRot0', rot: 0 },
+            { id: 'btnRot90', rot: 90 },
+            { id: 'btnRot180', rot: 180 },
+            { id: 'btnRot270', rot: 270 }
+        ];
+        rotButtons.forEach(({ id, rot }) => {
+            document.getElementById(id).onclick = () => {
+                rotButtons.forEach(b => document.getElementById(b.id).classList.remove('active'));
+                document.getElementById(id).classList.add('active');
+                this.rotation = rot;
                 this.render();
             };
         });
-        
+        document.getElementById('btnRot0').classList.add('active');
+
         document.querySelectorAll('.color-preset').forEach(preset => {
             preset.onclick = () => {
                 document.querySelectorAll('.color-preset').forEach(p => p.classList.remove('active'));
@@ -282,31 +454,242 @@ class GerberViewer {
                 this.render();
             };
         });
-        
+
         const container = document.getElementById('canvasContainer');
-        container.onwheel = e => { e.preventDefault(); this.setZoom(this.zoom * (e.deltaY < 0 ? 1.15 : 0.87)); };
-        container.onmousedown = e => { this.drag = true; this.lastMouse = {x:e.clientX, y:e.clientY}; this.canvas2d.style.cursor = 'grabbing'; };
-        container.onmousemove = e => {
-            if (!this.drag) return;
-            this.pan.x += e.clientX - this.lastMouse.x;
-            this.pan.y += e.clientY - this.lastMouse.y;
-            this.render();
-            this.lastMouse = {x:e.clientX, y:e.clientY};
+        container.onwheel = e => {
+            e.preventDefault();
+            this.setZoom(this.zoom * (e.deltaY < 0 ? 1.15 : 0.87));
         };
-        container.onmouseup = container.onmouseleave = () => { this.drag = false; this.canvas2d.style.cursor = 'grab'; };
-        window.onresize = () => { if (this.layers.length) this.fit(); };
+
+        container.onmousedown = e => {
+            // Shift+click during measuring = pan mode
+            if (this.measuring && e.shiftKey && e.button === 0) {
+                this.drag = true;
+                this.lastMouse = {x:e.clientX, y:e.clientY};
+                this.canvas2d.style.cursor = 'grabbing';
+                return;
+            }
+            // Left click only for measuring
+            if (this.measuring && e.button === 0) {
+                let coords = this.screenToWorld(e.clientX, e.clientY);
+                // Apply snap if enabled
+                if (this.snapMode) {
+                    const snapped = this.findSnapPoint(coords);
+                    if (snapped) coords = snapped;
+                }
+                if (!this.measureStart) {
+                    // Start new measurement, clear any previous
+                    this.measureEnd = null;
+                    this.measureStart = coords;
+                    document.getElementById('measureInfo').classList.remove('show');
+                } else if (!this.measureEnd) {
+                    // Complete measurement
+                    this.measureEnd = coords;
+                    this.showMeasurement();
+                    this.render();
+                } else {
+                    // Start new measurement after completing previous
+                    this.measureStart = coords;
+                    this.measureEnd = null;
+                    document.getElementById('measureInfo').classList.remove('show');
+                }
+                this.render();
+                return;
+            }
+            if (e.button === 0) {
+                this.drag = true;
+                this.lastMouse = {x:e.clientX, y:e.clientY};
+                this.canvas2d.style.cursor = 'grabbing';
+            }
+        };
+
+        // Right-click to cancel/reset measurement
+        container.oncontextmenu = e => {
+            if (!this.measuring) return;
+            e.preventDefault();
+            this.measureStart = null;
+            this.measureEnd = null;
+            document.getElementById('measureInfo').classList.remove('show');
+            this.render();
+        };
+
+        // ESC key to cancel measurement
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && this.measuring) {
+                this.measureStart = null;
+                this.measureEnd = null;
+                document.getElementById('measureInfo').classList.remove('show');
+                this.render();
+            }
+        });
+
+        container.onmousemove = e => {
+            // Pan during measurement with Shift held
+            if (this.drag) {
+                this.pan.x += e.clientX - this.lastMouse.x;
+                this.pan.y += e.clientY - this.lastMouse.y;
+                this.render();
+                this.lastMouse = {x:e.clientX, y:e.clientY};
+                return;
+            }
+            if (this.measuring && this.measureStart && !this.measureEnd) {
+                let coords = this.screenToWorld(e.clientX, e.clientY);
+                // Apply snap if enabled
+                if (this.snapMode) {
+                    const snapped = this.findSnapPoint(coords);
+                    if (snapped) coords = snapped;
+                }
+                this.tempMeasureEnd = coords;
+                this.showMeasurement(true);
+                this.render();
+            }
+        };
+
+        container.onmouseup = container.onmouseleave = (e) => {
+            this.drag = false;
+            this.canvas2d.style.cursor = this.measuring ? 'crosshair' : 'grab';
+        };
+
+        window.onresize = () => {
+            if (this.layers.length) {
+                this.fit();
+            }
+        };
     }
-    
+
+    screenToWorld(screenX, screenY) {
+        const rect = this.canvas2d.getBoundingClientRect();
+        const canvasX = screenX - rect.left;
+        const canvasY = screenY - rect.top;
+
+        const scale = this.ppm * this.zoom;
+        const bw = this.bounds.maxX - this.bounds.minX;
+        const bh = this.bounds.maxY - this.bounds.minY;
+
+        let x = (canvasX - this.pan.x) / scale + this.bounds.minX;
+        let y = (canvasY - this.pan.y) / scale;
+        // Correct for Y-flip (Gerber Y grows up, canvas Y grows down)
+        y = bh - y + this.bounds.minY;
+
+        return { x, y };
+    }
+
+    showMeasurement(isPreview = false) {
+        const endPoint = isPreview ? this.tempMeasureEnd : this.measureEnd;
+        if (!this.measureStart || !endPoint) return;
+        const dx = endPoint.x - this.measureStart.x;
+        const dy = endPoint.y - this.measureStart.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        document.getElementById('measureValue').textContent = dist.toFixed(3) + ' mm';
+        document.getElementById('measureDetails').textContent = `ΔX: ${dx.toFixed(3)} mm | ΔY: ${dy.toFixed(3)} mm`;
+        document.getElementById('measureInfo').classList.add('show');
+    }
+
+    findSnapPoint(coords) {
+        if (!this.bounds) return null;
+
+        let bestDist = this.snapDistance;
+        let bestPoint = null;
+
+        // Search for drill holes
+        for (const layer of this.layers) {
+            if (layer.type === 'drill' && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'drill') {
+                        const d = Math.hypot(cmd.x - coords.x, cmd.y - coords.y);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestPoint = { x: cmd.x, y: cmd.y };
+                        }
+                    } else if (cmd.type === 'slot') {
+                        // Snap to slot endpoints
+                        const d1 = Math.hypot(cmd.x1 - coords.x, cmd.y1 - coords.y);
+                        const d2 = Math.hypot(cmd.x2 - coords.x, cmd.y2 - coords.y);
+                        if (d1 < bestDist) {
+                            bestDist = d1;
+                            bestPoint = { x: cmd.x1, y: cmd.y1 };
+                        }
+                        if (d2 < bestDist) {
+                            bestDist = d2;
+                            bestPoint = { x: cmd.x2, y: cmd.y2 };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search for pad centers (flashes) on copper layers
+        for (const layer of this.layers) {
+            if ((layer.type === 'copper' || layer.type === 'inner') && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'flash') {
+                        const d = Math.hypot(cmd.x - coords.x, cmd.y - coords.y);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestPoint = { x: cmd.x, y: cmd.y };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search for line endpoints on copper layers
+        for (const layer of this.layers) {
+            if ((layer.type === 'copper' || layer.type === 'inner') && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'line') {
+                        const d1 = Math.hypot(cmd.x1 - coords.x, cmd.y1 - coords.y);
+                        const d2 = Math.hypot(cmd.x2 - coords.x, cmd.y2 - coords.y);
+                        if (d1 < bestDist) {
+                            bestDist = d1;
+                            bestPoint = { x: cmd.x1, y: cmd.y1 };
+                        }
+                        if (d2 < bestDist) {
+                            bestDist = d2;
+                            bestPoint = { x: cmd.x2, y: cmd.y2 };
+                        }
+                    } else if (cmd.type === 'arc') {
+                        // Snap to arc endpoints
+                        const d1 = Math.hypot(cmd.x1 - coords.x, cmd.y1 - coords.y);
+                        const d2 = Math.hypot(cmd.x2 - coords.x, cmd.y2 - coords.y);
+                        if (d1 < bestDist) {
+                            bestDist = d1;
+                            bestPoint = { x: cmd.x1, y: cmd.y1 };
+                        }
+                        if (d2 < bestDist) {
+                            bestDist = d2;
+                            bestPoint = { x: cmd.x2, y: cmd.y2 };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search for board outline vertices
+        if (this.boardOutline?.length >= 3) {
+            for (const p of this.boardOutline) {
+                const d = Math.hypot(p.x - coords.x, p.y - coords.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestPoint = { x: p.x, y: p.y };
+                }
+            }
+        }
+
+        return bestPoint;
+    }
+
     setView(view) {
+        this.currentView = view;
         this.layers.forEach(l => {
             if (view === 'all') l.visible = true;
             else if (view === 'top') l.visible = l.side === 'top' || l.side === 'both';
             else if (view === 'bottom') l.visible = l.side === 'bottom' || l.side === 'both';
         });
         this.updateLayerList();
-        this.render();
+        this.fit();
     }
-    
+
     async loadFiles(fileList) {
         document.getElementById('loading').classList.add('show');
         const files = [];
@@ -316,26 +699,30 @@ class GerberViewer {
         }
         for (const f of files) {
             try {
-                const layer = this.parseFile(f.name, await f.text());
+                const text = await f.text();
+                const layer = this.parseFile(f.name, text);
                 if (layer?.cmds.length > 0) { this.files.push(f); this.layers.push(layer); }
             } catch(e) { console.error('Parse error:', f.name, e); }
         }
         this.extractBoardOutline();
         this.calcBounds();
+        this.extractNets();
         this.updateUI();
         this.updateStats();
         if (this.layers.length > 0) {
             document.getElementById('emptyState').style.display = 'none';
             this.canvas2d.style.display = 'block';
+            // Apply default TOP view
+            this.setView('top');
             this.fit();
         }
         document.getElementById('loading').classList.remove('show');
     }
-    
+
     async extractZip(zipFile) {
         const zip = await JSZip.loadAsync(zipFile);
         const files = [];
-        const ext = ['gtl','gbl','gts','gbs','gto','gbo','drl','xln','gko','gm1','gbr','ger','gtp','gbp','txt','gdl','gme'];
+        const ext = ['gtl','gbl','gts','gbs','gto','gbo','drl','xln','gko','gm1','gbr','ger','gtp','gbp','txt','gdl','gme','g1','g2','g3','g4','g5','g6','gp1','gp2','gin','gp'];
         for (const [name, entry] of Object.entries(zip.files)) {
             if (!entry.dir && ext.includes(name.split('.').pop().toLowerCase())) {
                 files.push(new File([await entry.async('string')], name.split('/').pop()));
@@ -343,11 +730,44 @@ class GerberViewer {
         }
         return files;
     }
-    
-    detectLayerType(name, ext) {
+
+    detectLayerType(name, ext, x2FileFunction) {
         const n = name.toLowerCase();
-        if (n.includes('toplayer') || n.includes('top_copper') || n.includes('-f_cu') || ext==='gtl') return {type:'copper',side:'top',order:10};
-        if (n.includes('bottomlayer') || n.includes('bottom_copper') || n.includes('-b_cu') || ext==='gbl') return {type:'copper',side:'bottom',order:11};
+
+        // Gerber X2: use file function attribute if present
+        if (x2FileFunction) {
+            const func = x2FileFunction.toLowerCase();
+            if (func.includes('copper') && func.includes('top')) return {type:'copper',side:'top',order:10};
+            if (func.includes('copper') && func.includes('bot')) return {type:'copper',side:'bottom',order:11};
+            if (func.includes('copper') && func.includes('inr')) {
+                const match = func.match(/l(\d+)/i);
+                const layerNum = match ? parseInt(match[1]) : 2;
+                return {type:'inner',side:'inner',order:10 + layerNum * 0.1};
+            }
+            if (func.includes('soldermask') && func.includes('top')) return {type:'mask',side:'top',order:20};
+            if (func.includes('soldermask') && func.includes('bot')) return {type:'mask',side:'bottom',order:21};
+            if (func.includes('legend') && func.includes('top')) return {type:'silk',side:'top',order:30};
+            if (func.includes('legend') && func.includes('bot')) return {type:'silk',side:'bottom',order:31};
+            if (func.includes('profile') || func.includes('outline')) return {type:'outline',side:'both',order:0};
+            if (func.includes('plated') || func.includes('drill')) return {type:'drill',side:'both',order:50};
+        }
+
+        // Traditional detection
+        if (n.includes('toplayer') || n.includes('top_copper') || n.includes('-f_cu') || n.includes('top.g') || ext==='gtl') return {type:'copper',side:'top',order:10};
+        if (n.includes('bottomlayer') || n.includes('bottom_copper') || n.includes('-b_cu') || n.includes('bottom.g') || ext==='gbl') return {type:'copper',side:'bottom',order:11};
+
+        // Inner layers
+        if (n.includes('inner') || n.includes('inr') || n.match(/in\d+/) || n.match(/layer[_\s]?\d/) || ext.match(/^g\d$/)) {
+            const match = n.match(/(\d+)/);
+            const layerNum = match ? parseInt(match[1]) : 2;
+            return {type:'inner',side:'inner',order:10 + layerNum * 0.1};
+        }
+        if (ext === 'g2' || ext === 'g3' || ext === 'g4' || ext === 'g5' || ext === 'g6' || ext === 'gin' || ext === 'gp1' || ext === 'gp2') {
+            const match = ext.match(/(\d+)/);
+            const layerNum = match ? parseInt(match[1]) : 2;
+            return {type:'inner',side:'inner',order:10 + layerNum * 0.1};
+        }
+
         if (n.includes('topsoldermask') || n.includes('topmask') || n.includes('-f_mask') || ext==='gts') return {type:'mask',side:'top',order:20};
         if (n.includes('bottomsoldermask') || n.includes('bottommask') || n.includes('-b_mask') || ext==='gbs') return {type:'mask',side:'bottom',order:21};
         if (n.includes('topsilk') || n.includes('-f_silks') || ext==='gto') return {type:'silk',side:'top',order:30};
@@ -356,21 +776,37 @@ class GerberViewer {
         if (n.includes('drill') || ext==='drl' || ext==='xln') return {type:'drill',side:'both',order:50};
         return {type:'unknown',side:'both',order:100};
     }
-    
+
     getLayerColor(type) {
-        return {copper:this.colors.copper, mask:this.colors.mask, silk:this.colors.silk, outline:'#facc15'}[type] || '#666';
+        const colors = {
+            copper: this.colors.copper,
+            mask: this.colors.mask,
+            silk: this.colors.silk,
+            outline: '#facc15',
+            inner: '#cd7f32'  // Bronze for inner layers
+        };
+        return colors[type] || '#666';
     }
-    
+
     parseFile(name, text) {
         const ext = name.toLowerCase().split('.').pop();
-        const info = this.detectLayerType(name, ext);
+
+        // Parse Gerber X2 attributes first
+        let x2FileFunction = null;
+        const x2Match = text.match(/%TF\.FileFunction,([^*%]+)\*/);
+        if (x2Match) {
+            x2FileFunction = x2Match[1];
+            this.x2Attributes[name] = { fileFunction: x2FileFunction };
+        }
+
+        const info = this.detectLayerType(name, ext, x2FileFunction);
         info.color = this.getLayerColor(info.type);
-        
+
         const isDrill = (ext==='drl' || ext==='xln' || text.includes('M48'));
-        
+
         return isDrill ? this.parseDrill(name, text, info) : this.parseGerber(name, text, info);
     }
-    
+
     parseGerber(name, text, info) {
         // Format defaults
         let xInt = 2, xDec = 4, unit = 'mm';
@@ -379,10 +815,14 @@ class GerberViewer {
         let curAp = null, x = 0, y = 0, interp = 'linear', polarity = 'dark';
         let inRegion = false, regionPts = [];
         const cmds = [];
-        
+
+        // Gerber X2 attributes
+        let apertureFunction = null;
+        const netNames = new Map();
+
         // Calculate coordinate divisor based on decimal places
         const getScale = () => Math.pow(10, xDec) * (unit === 'in' ? 1/25.4 : 1);
-        
+
         // Parse coordinate string to mm
         const parseCoord = (s) => {
             if (!s) return null;
@@ -396,80 +836,117 @@ class GerberViewer {
             if (neg) val = -val;
             return unit === 'in' ? val * 25.4 : val;
         };
-        
+
         // First pass: extract macros
         const macroRegex = /%AM([A-Za-z_][A-Za-z0-9_]*)\*([^%]*?)%/gs;
         let match;
         while ((match = macroRegex.exec(text)) !== null) {
             macros[match[1]] = match[2];
         }
-        
+
         // Process lines
         const lines = text.split(/\r?\n/);
         for (const line of lines) {
             const l = line.trim();
             if (!l || l.startsWith('G04')) continue;
-            
+
+            // Gerber X2: File attributes
+            let m = l.match(/%TF\.([^,*]+),?([^*%]*)\*%?/);
+            if (m) {
+                this.x2Attributes[name] = this.x2Attributes[name] || {};
+                this.x2Attributes[name][m[1]] = m[2];
+                continue;
+            }
+
+            // Gerber X2: Aperture attributes
+            m = l.match(/%TA\.AperFunction,([^*%]+)\*%?/);
+            if (m) {
+                apertureFunction = m[1];
+                continue;
+            }
+
+            // Gerber X2: Net name
+            m = l.match(/%TO\.N,([^*%]+)\*%?/);
+            if (m) {
+                netNames.set('current', m[1]);
+                continue;
+            }
+
+            // Gerber X2: Component
+            m = l.match(/%TO\.C,([^*%]+)\*%?/);
+            if (m) {
+                // Store component reference
+                continue;
+            }
+
+            // Delete attributes
+            if (l.includes('%TD')) {
+                apertureFunction = null;
+                netNames.delete('current');
+                continue;
+            }
+
             // Format spec: %FSLAX45Y45*%
-            let m = l.match(/%FSLAX(\d)(\d)Y\d+\*%/);
+            m = l.match(/%FSLAX(\d)(\d)Y\d+\*%/);
             if (m) { xInt = +m[1]; xDec = +m[2]; continue; }
-            
+
             // Unit
             if (l.includes('%MOMM')) { unit = 'mm'; continue; }
             if (l.includes('%MOIN')) { unit = 'in'; continue; }
-            
+
             // Standard aperture: %ADD10C,0.5*% or %ADD10R,1.0X0.5*%
             m = l.match(/%ADD(\d+)([CROP]),?([^*]*)\*%/);
             if (m) {
                 const num = m[1], type = m[2];
                 const params = m[3] ? m[3].split('X').map(Number) : [0];
-                apertures[num] = { type, params, rotation: 0 };
+                apertures[num] = { type, params, rotation: 0, function: apertureFunction };
                 continue;
             }
-            
+
             // Macro aperture: %ADD12MACRO1,0.5X0.8X90*%
             m = l.match(/%ADD(\d+)([A-Za-z_][A-Za-z0-9_]*),?([^*]*)\*%/);
             if (m && !['C','R','O','P'].includes(m[2])) {
                 const num = m[1], macroName = m[2];
                 const params = m[3] ? m[3].split('X').map(Number) : [];
-                
+
                 if (macros[macroName]) {
                     apertures[num] = this.evaluateMacro(macros[macroName], params);
+                    apertures[num].function = apertureFunction;
                 } else {
                     // Unknown macro, fallback
-                    apertures[num] = { type: 'C', params: [0.5], rotation: 0 };
+                    apertures[num] = { type: 'C', params: [0.5], rotation: 0, function: apertureFunction };
                 }
                 continue;
             }
-            
+
             // Polarity
             if (l.includes('%LPD')) { polarity = 'dark'; continue; }
             if (l.includes('%LPC')) { polarity = 'clear'; continue; }
-            
+
             // Process commands
             for (const cmd of l.split('*').filter(c => c.trim())) {
                 const c = cmd.trim();
-                
+
                 // Interpolation mode
                 if (c === 'G01' || c === 'G1') { interp = 'linear'; continue; }
                 if (c === 'G02' || c === 'G2') { interp = 'cw'; continue; }
                 if (c === 'G03' || c === 'G3') { interp = 'ccw'; continue; }
                 if (c === 'G74' || c === 'G75') continue;
-                
+
                 // Region
                 if (c === 'G36') { inRegion = true; regionPts = []; continue; }
                 if (c === 'G37') {
                     if (regionPts.length >= 3) {
-                        cmds.push({ type: 'region', points: [...regionPts], polarity });
+                        cmds.push({ type: 'region', points: [...regionPts], polarity, net: netNames.get('current') });
                     }
                     inRegion = false;
                     continue;
                 }
-                
+
                 // Aperture select: D10, D11, etc.
                 m = c.match(/^D(\d+)$/);
                 if (m && +m[1] >= 10) { curAp = m[1]; continue; }
-                
+
                 // Coordinate move/draw
                 m = c.match(/^(?:G0?([123]))?(?:X(-?\d+))?(?:Y(-?\d+))?(?:I(-?\d+))?(?:J(-?\d+))?(?:D0?([123]))?$/);
                 if (m && (m[2] || m[3] || m[6])) {
@@ -479,19 +956,19 @@ class GerberViewer {
                         else if (m[1] === '2') interp = 'cw';
                         else if (m[1] === '3') interp = 'ccw';
                     }
-                    
+
                     const ox = x, oy = y;
                     if (m[2]) x = parseCoord(m[2]);
                     if (m[3]) y = parseCoord(m[3]);
                     const i = m[4] ? parseCoord(m[4]) : 0;
                     const j = m[5] ? parseCoord(m[5]) : 0;
                     const d = m[6] ? +m[6] : null;
-                    
+
                     if (inRegion) {
                         if (d === 2) {
                             // Move - start new region
                             if (regionPts.length >= 3) {
-                                cmds.push({ type: 'region', points: [...regionPts], polarity });
+                                cmds.push({ type: 'region', points: [...regionPts], polarity, net: netNames.get('current') });
                             }
                             regionPts = [{ x, y }];
                         } else if (d === 1 || d === null) {
@@ -507,28 +984,33 @@ class GerberViewer {
                             // Draw
                             const ap = apertures[curAp] || { type: 'C', params: [0.1] };
                             if (interp === 'linear') {
-                                cmds.push({ type: 'line', x1: ox, y1: oy, x2: x, y2: y, width: ap.params[0] || 0.1, polarity });
+                                cmds.push({ type: 'line', x1: ox, y1: oy, x2: x, y2: y, width: ap.params[0] || 0.1, polarity, net: netNames.get('current') });
                             } else {
-                                cmds.push({ type: 'arc', x1: ox, y1: oy, x2: x, y2: y, i, j, cw: interp === 'cw', width: ap.params[0] || 0.1, polarity });
+                                cmds.push({ type: 'arc', x1: ox, y1: oy, x2: x, y2: y, i, j, cw: interp === 'cw', width: ap.params[0] || 0.1, polarity, net: netNames.get('current') });
                             }
                         } else if (d === 3) {
                             // Flash
                             const ap = apertures[curAp] || { type: 'C', params: [0.5] };
-                            cmds.push({ type: 'flash', x, y, aperture: ap, polarity });
+                            cmds.push({ type: 'flash', x, y, aperture: ap, polarity, net: netNames.get('current') });
+
+                            // Store pad for netlist
+                            if (info.type === 'copper') {
+                                this.pads.push({ x, y, aperture: ap, net: netNames.get('current'), layer: info.side });
+                            }
                         }
                     }
                 }
             }
         }
-        
+
         console.log(`[${name}] Format: ${xInt}.${xDec}, Unit: ${unit}, Apertures: ${Object.keys(apertures).length}, Commands: ${cmds.length}`);
         return { name, ...info, cmds, visible: true };
     }
-    
+
     evaluateMacro(macroBody, params) {
         // Parse macro primitives and evaluate with parameters
         const primitives = macroBody.split('*').filter(p => p.trim());
-        
+
         // Function to evaluate expression with $n variables
         const evalExpr = (expr) => {
             if (expr === undefined || expr === null) return 0;
@@ -546,14 +1028,14 @@ class GerberViewer {
                 return parseFloat(s) || 0;
             }
         };
-        
+
         for (const prim of primitives) {
             const p = prim.trim();
             if (!p || p.startsWith('0')) continue; // Skip comments
-            
+
             const parts = p.split(',');
             const code = parseInt(parts[0]);
-            
+
             if (code === 1) {
                 // Circle: 1,exposure,diameter,cx,cy[,rotation]
                 const d = evalExpr(parts[2]);
@@ -601,31 +1083,31 @@ class GerberViewer {
                 return { type: 'R', params: [w, h], rotation: rot };
             }
         }
-        
+
         // Fallback: if params look like width/height, use rectangle
         if (params.length >= 2 && params[0] > 0 && params[1] > 0) {
             const rot = params[2] || 0;
             return { type: 'R', params: [params[0], params[1]], rotation: rot };
         }
-        
+
         return { type: 'C', params: [params[0] || 0.5], rotation: 0 };
     }
-    
+
     arcToPoints(x1, y1, x2, y2, i, j, cw) {
         const cx = x1 + i, cy = y1 + j;
         const r = Math.sqrt(i * i + j * j);
         if (r < 0.0001) return [{ x: x2, y: y2 }];
-        
+
         let a1 = Math.atan2(y1 - cy, x1 - cx);
         let a2 = Math.atan2(y2 - cy, x2 - cx);
-        
+
         if (Math.abs(x1 - x2) < 0.01 && Math.abs(y1 - y2) < 0.01) {
             a2 = cw ? a1 - Math.PI * 2 : a1 + Math.PI * 2;
         } else {
             if (cw && a2 >= a1) a2 -= Math.PI * 2;
             if (!cw && a2 <= a1) a2 += Math.PI * 2;
         }
-        
+
         const pts = [];
         const steps = Math.max(72, Math.ceil(Math.abs(a2 - a1) * r / 0.1));
         for (let n = 1; n <= steps; n++) {
@@ -634,7 +1116,7 @@ class GerberViewer {
         }
         return pts;
     }
-    
+
     parseDrill(name, text, info) {
         const tools = {};
         let curTool = null;
@@ -642,20 +1124,20 @@ class GerberViewer {
         let formatInt = 3, formatDec = 3;
         const cmds = [];
         let inHeader = true;
-        
+
         const lines = text.split(/\r?\n/);
-        
+
         for (const line of lines) {
             const l = line.trim();
             if (!l || l.startsWith(';')) continue;
-            
+
             if (l === '%' || l === 'M95') { inHeader = false; continue; }
             if (l === 'M30' || l === 'M00') break;
-            
+
             // Format from comment
             let m = l.match(/FILE_FORMAT=(\d):(\d)/i);
             if (m) { formatInt = +m[1]; formatDec = +m[2]; continue; }
-            
+
             // Unit/format line
             m = l.match(/^(METRIC|INCH),?(LZ|TZ)?,?(\d+\.?\d*)?/i);
             if (m) {
@@ -667,7 +1149,7 @@ class GerberViewer {
                 }
                 continue;
             }
-            
+
             // Tool definition
             m = l.match(/T(\d+)C([\d.]+)/i);
             if (m) {
@@ -677,7 +1159,7 @@ class GerberViewer {
                 tools[parseInt(m[1]).toString()] = dia;
                 continue;
             }
-            
+
             // Tool select
             m = l.match(/^T(\d+)$/i);
             if (m) {
@@ -685,9 +1167,9 @@ class GerberViewer {
                 if (!tools[curTool]) curTool = parseInt(curTool).toString();
                 continue;
             }
-            
+
             if (inHeader) continue;
-            
+
             // Slot
             m = line.match(/X([+-]?\d+)Y([+-]?\d+)G85X([+-]?\d+)Y([+-]?\d+)/i);
             if (m && curTool) {
@@ -700,7 +1182,7 @@ class GerberViewer {
                 cmds.push({ type: 'slot', x1, y1, x2, y2, diameter: tools[curTool] || 0.8 });
                 continue;
             }
-            
+
             // Drill
             m = line.match(/^X([+-]?\d+)Y([+-]?\d+)$/i);
             if (m && curTool) {
@@ -711,15 +1193,15 @@ class GerberViewer {
                 cmds.push({ type: 'drill', x: dx, y: dy, diameter: tools[curTool] || 0.8 });
             }
         }
-        
+
         console.log(`[${name}] Drill: ${formatInt}.${formatDec}, Unit: ${unit}, Tools: ${Object.keys(tools).length}, Holes: ${cmds.length}`);
         return { name, ...info, cmds, visible: true };
     }
-    
+
     extractBoardOutline() {
         const ol = this.layers.find(l => l.type === 'outline');
         if (!ol) { this.boardOutline = null; return; }
-        
+
         const segments = [];
         for (const cmd of ol.cmds) {
             if (cmd.type === 'line') {
@@ -737,16 +1219,16 @@ class GerberViewer {
                 }
             }
         }
-        
+
         if (!segments.length) { this.boardOutline = null; return; }
-        
+
         const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
-        
+
         let current = segments[0];
         current.used = true;
         const path = [{ x: current.x1, y: current.y1 }, { x: current.x2, y: current.y2 }];
         let endX = current.x2, endY = current.y2;
-        
+
         for (let iter = 0; iter < segments.length * 2; iter++) {
             let best = null, bestDist = Infinity, reversed = false;
             for (const seg of segments) {
@@ -762,10 +1244,10 @@ class GerberViewer {
             endX = reversed ? best.x1 : best.x2;
             endY = reversed ? best.y1 : best.y2;
         }
-        
+
         this.boardOutline = path;
     }
-    
+
     calcBounds() {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const l of this.layers) {
@@ -781,23 +1263,183 @@ class GerberViewer {
         }
         if (minX !== Infinity) this.bounds = { minX, minY, maxX, maxY };
     }
-    
+
+    extractNets() {
+        this.nets = [];
+        const netMap = new Map();
+
+        for (const pad of this.pads) {
+            if (pad.net) {
+                if (!netMap.has(pad.net)) {
+                    netMap.set(pad.net, []);
+                }
+                netMap.get(pad.net).push(pad);
+            }
+        }
+
+        for (const [name, pads] of netMap) {
+            this.nets.push({ name, pads });
+        }
+
+        // Also extract nets from traces
+        for (const layer of this.layers) {
+            if (layer.type === 'copper' || layer.type === 'inner') {
+                for (const cmd of layer.cmds) {
+                    if (cmd.net && !netMap.has(cmd.net)) {
+                        netMap.set(cmd.net, []);
+                        this.nets.push({ name: cmd.net, pads: [] });
+                    }
+                }
+            }
+        }
+    }
+
+    updateNetlistPanel() {
+        const body = document.getElementById('netlistBody');
+        if (!this.nets.length) {
+            body.innerHTML = '<div style="padding:20px;color:var(--text2);text-align:center">Nessuna net trovata.<br>Carica file Gerber X2 per visualizzare le net.</div>';
+            return;
+        }
+
+        body.innerHTML = this.nets.map(net => `
+            <div class="net-item">
+                <div class="net-name">${net.name}</div>
+                <div class="net-pads">${net.pads.length} pad${net.pads.length !== 1 ? 's' : ''}</div>
+            </div>
+        `).join('');
+    }
+
+    runDRC() {
+        this.drcResults = [];
+        let errors = 0, warnings = 0, ok = 0;
+
+        // Check minimum trace width
+        const minTraceWidth = 0.15; // 6 mil
+        for (const layer of this.layers) {
+            if (layer.type === 'copper' || layer.type === 'inner') {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'line' && cmd.width < minTraceWidth) {
+                        this.drcResults.push({
+                            type: 'error',
+                            title: 'Traccia troppo sottile',
+                            desc: `Larghezza ${cmd.width.toFixed(3)}mm < ${minTraceWidth}mm su ${layer.name}`
+                        });
+                        errors++;
+                    }
+                }
+            }
+        }
+
+        // Check drill sizes
+        const minDrill = 0.2;
+        const maxDrill = 6.0;
+        for (const layer of this.layers) {
+            if (layer.type === 'drill') {
+                for (const cmd of layer.cmds) {
+                    if (cmd.diameter < minDrill) {
+                        this.drcResults.push({
+                            type: 'error',
+                            title: 'Foro troppo piccolo',
+                            desc: `Diametro ${cmd.diameter.toFixed(3)}mm < ${minDrill}mm`
+                        });
+                        errors++;
+                    }
+                    if (cmd.diameter > maxDrill) {
+                        this.drcResults.push({
+                            type: 'warning',
+                            title: 'Foro molto grande',
+                            desc: `Diametro ${cmd.diameter.toFixed(3)}mm > ${maxDrill}mm`
+                        });
+                        warnings++;
+                    }
+                }
+            }
+        }
+
+        // Check for missing layers
+        const hasTop = this.layers.some(l => l.type === 'copper' && l.side === 'top');
+        const hasBottom = this.layers.some(l => l.type === 'copper' && l.side === 'bottom');
+        const hasOutline = this.layers.some(l => l.type === 'outline');
+        const hasDrill = this.layers.some(l => l.type === 'drill');
+
+        if (!hasOutline) {
+            this.drcResults.push({
+                type: 'warning',
+                title: 'Outline mancante',
+                desc: 'Nessun layer outline/board edge trovato'
+            });
+            warnings++;
+        }
+
+        if (!hasDrill && (hasTop || hasBottom)) {
+            this.drcResults.push({
+                type: 'info',
+                title: 'Drill mancante',
+                desc: 'Nessun file drill trovato'
+            });
+        }
+
+        // Check board size
+        if (this.bounds) {
+            const w = this.bounds.maxX - this.bounds.minX;
+            const h = this.bounds.maxY - this.bounds.minY;
+            if (w > 500 || h > 500) {
+                this.drcResults.push({
+                    type: 'warning',
+                    title: 'Scheda molto grande',
+                    desc: `Dimensioni ${w.toFixed(1)} x ${h.toFixed(1)} mm`
+                });
+                warnings++;
+            }
+        }
+
+        // Count OK checks
+        ok = 5 - errors - warnings;
+        if (ok < 0) ok = 0;
+
+        // Update UI
+        document.getElementById('drcErrors').textContent = errors;
+        document.getElementById('drcWarnings').textContent = warnings;
+        document.getElementById('drcOk').textContent = ok;
+
+        const resultsDiv = document.getElementById('drcResults');
+        if (!this.drcResults.length) {
+            resultsDiv.innerHTML = '<div style="padding:16px;text-align:center;color:var(--accent)">&#10003; Nessun problema trovato</div>';
+        } else {
+            resultsDiv.innerHTML = this.drcResults.map(r => `
+                <div class="drc-item ${r.type}">
+                    <div class="drc-item-title">${r.title}</div>
+                    <div class="drc-item-desc">${r.desc}</div>
+                </div>
+            `).join('');
+        }
+    }
+
     updateStats() {
         if (!this.bounds) {
             document.getElementById('statSize').textContent = '-';
             document.getElementById('statHoles').textContent = '-';
+            document.getElementById('statLayers').textContent = '-';
+            document.getElementById('statNets').textContent = '-';
             return;
         }
-        
+
         const w = (this.bounds.maxX - this.bounds.minX).toFixed(1);
         const h = (this.bounds.maxY - this.bounds.minY).toFixed(1);
-        document.getElementById('statSize').textContent = `${w} × ${h} mm`;
-        
+        document.getElementById('statSize').textContent = `${w} x ${h}`;
+
+        // Count copper layers
+        const copperLayers = this.layers.filter(l => l.type === 'copper' || l.type === 'inner').length;
+        document.getElementById('statLayers').textContent = copperLayers || '-';
+
+        // Count nets
+        document.getElementById('statNets').textContent = this.nets.length || '-';
+
         const drillLayers = this.layers.filter(l => l.type === 'drill');
         if (drillLayers.length) {
             let totalDrills = 0, totalSlots = 0;
             const toolStats = {};
-            
+
             for (const dl of drillLayers) {
                 for (const c of dl.cmds) {
                     if (c.type === 'drill') {
@@ -809,9 +1451,9 @@ class GerberViewer {
                     }
                 }
             }
-            
-            document.getElementById('statHoles').textContent = totalDrills + (totalSlots ? ` + ${totalSlots} slot` : '');
-            
+
+            document.getElementById('statHoles').textContent = totalDrills + (totalSlots ? ` + ${totalSlots}` : '');
+
             const tbody = document.querySelector('#drillTable tbody');
             tbody.innerHTML = Object.entries(toolStats)
                 .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]))
@@ -823,13 +1465,13 @@ class GerberViewer {
             document.getElementById('drillTable').style.display = 'none';
         }
     }
-    
+
     fit() {
         if (!this.bounds) return;
         const rect = document.getElementById('canvasContainer').getBoundingClientRect();
         this.canvas2d.width = rect.width;
         this.canvas2d.height = rect.height;
-        
+
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
         const sw = (rect.width - 80) / bw;
@@ -840,7 +1482,7 @@ class GerberViewer {
         this.updateZoomDisplay();
         this.render();
     }
-    
+
     setZoom(z) {
         const old = this.zoom;
         this.zoom = Math.max(0.05, Math.min(50, z));
@@ -851,41 +1493,51 @@ class GerberViewer {
         this.updateZoomDisplay();
         this.render();
     }
-    
+
     updateZoomDisplay() {
         document.getElementById('zoomDisplay').textContent = Math.round(this.zoom * 100) + '%';
     }
-    
+
     setAllLayersVisible(v) {
         this.layers.forEach(l => l.visible = v);
         this.updateLayerList();
         this.render();
     }
-    
+
     render() {
         if (!this.bounds || !this.layers.length) return;
-        
+
         const ctx = this.ctx;
+        const canvas = this.canvas2d;
+        const viewSide = this.currentView;
         const scale = this.ppm * this.zoom;
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
-        
+
         ctx.fillStyle = this.colors.bg;
-        ctx.fillRect(0, 0, this.canvas2d.width, this.canvas2d.height);
-        
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
         ctx.save();
         ctx.translate(this.pan.x, this.pan.y);
         ctx.scale(scale, scale);
-        
+
         // Apply rotation and flip
         const cx = bw / 2, cy = bh / 2;
         ctx.translate(cx, cy);
-        if (this.rotation) ctx.rotate(this.rotation * Math.PI / 180);
+
+        // Flip Y to match Gerber coordinate system (Y grows up)
+        ctx.scale(1, -1);
+
+        // For bottom view, also flip horizontally to show as mirrored
+        const isBottom = viewSide === 'bottom';
+        if (isBottom) ctx.scale(-1, 1);
+
+        if (this.rotation) ctx.rotate(-this.rotation * Math.PI / 180);
         if (this.flipH) ctx.scale(-1, 1);
         if (this.flipV) ctx.scale(1, -1);
         ctx.translate(-cx, -cy);
         ctx.translate(-this.bounds.minX, -this.bounds.minY);
-        
+
         // Clip to board outline and fill FR4
         if (this.boardOutline?.length >= 3) {
             ctx.save();
@@ -896,44 +1548,68 @@ class GerberViewer {
             }
             ctx.closePath();
             ctx.clip();
-            ctx.fillStyle = '#c19a6b';
+            ctx.fillStyle = this.colors.fr4;
             ctx.fill();
         }
-        
+
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
-        
+
+        // Filter layers based on view side
+        const isLayerVisible = (l) => {
+            if (!l.visible) return false;
+            if (viewSide === 'all') return true;
+            if (viewSide === 'top') return l.side === 'top' || l.side === 'both';
+            if (viewSide === 'bottom') return l.side === 'bottom' || l.side === 'both';
+            return true;
+        };
+
         if (this.copperOnly) {
+            // Copper only mode
             for (const l of sorted) {
-                if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && (l.type === 'copper' || l.type === 'inner')) this.renderLayer(l, ctx);
             }
         } else {
-            // 1. Copper
+            // 1. Inner layers (if visible)
             for (const l of sorted) {
-                if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && l.type === 'inner') this.renderLayer(l, ctx);
             }
-            
-            // 2. Solder mask
+
+            // 2. Copper
             for (const l of sorted) {
-                if (l.visible && l.type === 'mask') {
+                if (isLayerVisible(l) && l.type === 'copper') this.renderLayer(l, ctx);
+            }
+
+            // 3. Solder mask
+            for (const l of sorted) {
+                if (isLayerVisible(l) && l.type === 'mask') {
                     ctx.globalAlpha = 0.78;
                     this.renderSolderMask(l, ctx);
                     ctx.globalAlpha = 1;
                 }
             }
-            
-            // 3. Silkscreen
+
+            // 4. Silkscreen
             for (const l of sorted) {
-                if (l.visible && l.type === 'silk') this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && l.type === 'silk') this.renderLayer(l, ctx);
             }
         }
-        
-        // 4. Drills
+
+        // 5. Surface finish (on top of mask, visible in both modes)
+        if (this.surfaceFinish !== 'none' && this.surfaceFinishVisible) {
+            for (const l of sorted) {
+                if (isLayerVisible(l) && l.type === 'mask') {
+                    this.renderSurfaceFinish(l, ctx);
+                }
+            }
+        }
+
+        // 6. Drills (always visible on both sides)
         for (const l of sorted) {
             if (l.visible && l.type === 'drill') this.renderDrillLayer(l, ctx);
         }
-        
+
         if (this.boardOutline) ctx.restore();
-        
+
         // Outline stroke
         const ol = this.layers.find(l => l.type === 'outline');
         if (ol?.visible && this.boardOutline) {
@@ -947,33 +1623,76 @@ class GerberViewer {
             ctx.closePath();
             ctx.stroke();
         }
-        
+
         ctx.restore();
-    }
-    
-    renderSolderMask(layer, ctx) {
-        ctx.save();
-        
-        // Fill board with mask color
-        if (this.boardOutline?.length >= 3) {
-            ctx.fillStyle = layer.color;
+
+        // Draw measurement line
+        if (this.measuring && this.measureStart) {
+            const end = this.measureEnd || this.tempMeasureEnd || this.measureStart;
+            ctx.save();
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+
+            // Convert world to screen coordinates
+            const startScreen = this.worldToScreen(this.measureStart.x, this.measureStart.y);
+            const endScreen = this.worldToScreen(end.x, end.y);
+
             ctx.beginPath();
-            ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
-            for (let i = 1; i < this.boardOutline.length; i++) {
-                ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
-            }
-            ctx.closePath();
+            ctx.moveTo(startScreen.x, startScreen.y);
+            ctx.lineTo(endScreen.x, endScreen.y);
+            ctx.stroke();
+
+            // Draw endpoints (larger for better visibility)
+            ctx.fillStyle = '#22c55e';
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(startScreen.x, startScreen.y, 6, 0, Math.PI * 2);
             ctx.fill();
+            ctx.beginPath();
+            ctx.arc(endScreen.x, endScreen.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
         }
-        
-        // Cut out all dark features (pad openings)
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.fillStyle = '#000';
-        ctx.strokeStyle = '#000';
-        
+    }
+
+    worldToScreen(wx, wy) {
+        const scale = this.ppm * this.zoom;
+        const bw = this.bounds.maxX - this.bounds.minX;
+        const bh = this.bounds.maxY - this.bounds.minY;
+
+        let x = wx - this.bounds.minX;
+        let y = wy - this.bounds.minY;
+
+        // Apply transformations in reverse
+        const cx = bw / 2, cy = bh / 2;
+        x -= cx;
+        y -= cy;
+
+        // Y flip
+        y = -y;
+
+        x += cx;
+        y += cy;
+
+        return {
+            x: this.pan.x + x * scale,
+            y: this.pan.y + y * scale
+        };
+    }
+
+    renderSurfaceFinish(layer, ctx) {
+        // Render surface finish (gold/silver) on exposed pads
+        // Uses mask layer openings to determine where finish goes
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = this.finishColors[this.surfaceFinish];
+        ctx.strokeStyle = this.finishColors[this.surfaceFinish];
+
         for (const cmd of layer.cmds) {
             if (cmd.polarity === 'clear') continue;
-            
+
             if (cmd.type === 'region' && cmd.points.length >= 3) {
                 ctx.beginPath();
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
@@ -993,16 +1712,62 @@ class GerberViewer {
                 this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
             }
         }
-        
+
         ctx.restore();
     }
-    
+
+    renderSolderMask(layer, ctx) {
+        ctx.save();
+
+        // Fill board with mask color
+        if (this.boardOutline?.length >= 3) {
+            ctx.fillStyle = layer.color;
+            ctx.beginPath();
+            ctx.moveTo(this.boardOutline[0].x, this.boardOutline[0].y);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                ctx.lineTo(this.boardOutline[i].x, this.boardOutline[i].y);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Cut out all dark features (pad openings)
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = '#000';
+        ctx.strokeStyle = '#000';
+
+        for (const cmd of layer.cmds) {
+            if (cmd.polarity === 'clear') continue;
+
+            if (cmd.type === 'region' && cmd.points.length >= 3) {
+                ctx.beginPath();
+                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+            } else if (cmd.type === 'line') {
+                ctx.lineWidth = cmd.width || 0.1;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                ctx.lineTo(cmd.x2, cmd.y2);
+                ctx.stroke();
+            } else if (cmd.type === 'flash') {
+                this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
+            }
+        }
+
+        ctx.restore();
+    }
+
     renderLayer(layer, ctx) {
         for (const cmd of layer.cmds) {
             ctx.fillStyle = layer.color;
             ctx.strokeStyle = layer.color;
             ctx.globalCompositeOperation = cmd.polarity === 'clear' ? 'destination-out' : 'source-over';
-            
+
             if (cmd.type === 'region' && cmd.points.length >= 3) {
                 ctx.beginPath();
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
@@ -1032,31 +1797,35 @@ class GerberViewer {
         }
         ctx.globalCompositeOperation = 'source-over';
     }
-    
+
     renderDrillLayer(layer, ctx) {
         for (const cmd of layer.cmds) {
             if (cmd.type === 'drill') {
+                // Draw the hole (background color)
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.fillStyle = this.colors.bg;
                 ctx.beginPath();
                 ctx.arc(cmd.x, cmd.y, cmd.diameter / 2, 0, Math.PI * 2);
                 ctx.fill();
-                
+
+                // Draw thin edge outline around hole (not a pad ring)
                 ctx.strokeStyle = this.colors.copper;
-                ctx.lineWidth = 0.15;
+                ctx.lineWidth = 0.05;
                 ctx.beginPath();
-                ctx.arc(cmd.x, cmd.y, cmd.diameter / 2 + 0.15, 0, Math.PI * 2);
+                ctx.arc(cmd.x, cmd.y, cmd.diameter / 2, 0, Math.PI * 2);
                 ctx.stroke();
             } else if (cmd.type === 'slot') {
+                // Draw slot outline
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.strokeStyle = this.colors.copper;
                 ctx.lineCap = 'round';
-                ctx.lineWidth = cmd.diameter + 0.3;
+                ctx.lineWidth = cmd.diameter + 0.1;
                 ctx.beginPath();
                 ctx.moveTo(cmd.x1, cmd.y1);
                 ctx.lineTo(cmd.x2, cmd.y2);
                 ctx.stroke();
-                
+
+                // Draw slot hole
                 ctx.strokeStyle = this.colors.bg;
                 ctx.lineWidth = cmd.diameter;
                 ctx.beginPath();
@@ -1066,16 +1835,16 @@ class GerberViewer {
             }
         }
     }
-    
+
     drawFlash(ctx, x, y, ap) {
         const t = ap.type;
         const p = ap.params;
         const rot = (ap.rotation || 0) * Math.PI / 180;
-        
+
         ctx.save();
         ctx.translate(x, y);
         if (rot) ctx.rotate(rot);
-        
+
         if (t === 'C') {
             ctx.beginPath();
             ctx.arc(0, 0, (p[0] || 0.5) / 2, 0, Math.PI * 2);
@@ -1135,43 +1904,80 @@ class GerberViewer {
             ctx.arc(0, 0, (p[0] || 0.5) / 2, 0, Math.PI * 2);
             ctx.fill();
         }
-        
+
         ctx.restore();
     }
-    
+
     updateUI() {
         this.updateFileList();
         this.updateLayerList();
         document.getElementById('layerCount').textContent = this.layers.length;
     }
-    
+
     updateFileList() {
         document.getElementById('fileList').innerHTML = this.files.map((f, i) => {
             const l = this.layers[i];
-            return `<div class="file-item"><span class="file-tag ${l.type}">${l.type.slice(0,4)}</span><span class="file-name">${f.name}</span><button class="file-del" onclick="viewer.removeFile(${i})">×</button></div>`;
+            return `<div class="file-item"><span class="file-tag ${l.type}">${l.type.slice(0,4)}</span><span class="file-name">${f.name}</span><button class="file-del" onclick="viewer.removeFile(${i})">x</button></div>`;
         }).join('');
     }
-    
+
     updateLayerList() {
-        document.getElementById('layerList').innerHTML = this.layers.length ? this.layers.map((l, i) => `
-            <div class="layer-item" onclick="viewer.toggleLayer(${i})">
-                <div class="layer-toggle ${l.visible ? 'on' : ''}"></div>
-                <div class="layer-color" style="background:${l.color}"></div>
-                <span class="layer-name">${l.name}</span>
-            </div>`).join('') : '<div style="color:var(--text2);text-align:center;padding:16px">Nessun layer</div>';
+        let html = '';
+        if (this.layers.length) {
+            html = this.layers.map((l, i) => `
+                <div class="layer-item" onclick="viewer.toggleLayer(${i})">
+                    <div class="layer-toggle ${l.visible ? 'on' : ''}"></div>
+                    <div class="layer-color" style="background:${l.color}"></div>
+                    <span class="layer-name">${l.name}</span>
+                </div>`).join('');
+
+            // Add surface finish layer entry
+            const finishColor = this.surfaceFinish !== 'none' ? this.finishColors[this.surfaceFinish] : '#666';
+            html += `
+                <div class="layer-item" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px">
+                    <div class="layer-toggle ${this.surfaceFinishVisible ? 'on' : ''}" onclick="event.stopPropagation();viewer.toggleFinishVisibility()"></div>
+                    <div class="layer-color" style="background:${finishColor}"></div>
+                    <span class="layer-name" style="flex:1">Finitura</span>
+                    <select onchange="viewer.setFinishType(this.value);event.stopPropagation()" onclick="event.stopPropagation()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:11px">
+                        <option value="none" ${this.surfaceFinish === 'none' ? 'selected' : ''}>Nessuna</option>
+                        <option value="gold" ${this.surfaceFinish === 'gold' ? 'selected' : ''}>Oro</option>
+                        <option value="silver" ${this.surfaceFinish === 'silver' ? 'selected' : ''}>Argento</option>
+                    </select>
+                </div>`;
+        } else {
+            html = '<div style="color:var(--text2);text-align:center;padding:16px">Nessun layer</div>';
+        }
+        document.getElementById('layerList').innerHTML = html;
     }
-    
+
+    toggleFinishVisibility() {
+        this.surfaceFinishVisible = !this.surfaceFinishVisible;
+        this.updateLayerList();
+        this.render();
+    }
+
+    setFinishType(type) {
+        this.surfaceFinish = type;
+        // Update quick selection buttons
+        document.querySelectorAll('.finish-btn[data-finish]').forEach(b => {
+            b.classList.toggle('active', b.dataset.finish === type);
+        });
+        this.updateLayerList();
+        this.render();
+    }
+
     toggleLayer(i) {
         this.layers[i].visible = !this.layers[i].visible;
         this.updateLayerList();
         this.render();
     }
-    
+
     removeFile(i) {
         this.files.splice(i, 1);
         this.layers.splice(i, 1);
         this.extractBoardOutline();
         this.calcBounds();
+        this.extractNets();
         this.updateUI();
         this.updateStats();
         if (!this.layers.length) {
@@ -1181,18 +1987,21 @@ class GerberViewer {
             this.fit();
         }
     }
-    
+
     clear() {
         this.files = [];
         this.layers = [];
         this.bounds = null;
         this.boardOutline = null;
+        this.pads = [];
+        this.nets = [];
+        this.x2Attributes = {};
         this.updateUI();
         this.updateStats();
         document.getElementById('emptyState').style.display = 'flex';
         this.canvas2d.style.display = 'none';
     }
-    
+
     exportPng() {
         if (!this.layers.length) return;
         const a = document.createElement('a');
