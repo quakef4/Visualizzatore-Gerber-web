@@ -714,16 +714,54 @@ class GerberViewer {
             const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
             geometry = new THREE.BoxGeometry(w, h, thickness);
         } else if (ap.type === 'O') {
-            // Obround - use capsule shape
+            // Obround - elongated pad with rounded ends
             const w = (ap.params[0] || 0.5) * scale;
             const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
             if (Math.abs(w - h) < 0.001) {
                 geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 24);
                 geometry.rotateX(Math.PI / 2);
             } else {
-                geometry = new THREE.BoxGeometry(w, h, thickness);
+                // Create obround shape (stadium shape)
+                const shape = new THREE.Shape();
+                if (w > h) {
+                    const r = h / 2;
+                    const dx = (w - h) / 2;
+                    shape.moveTo(-dx, -r);
+                    shape.lineTo(dx, -r);
+                    shape.absarc(dx, 0, r, -Math.PI/2, Math.PI/2, false);
+                    shape.lineTo(-dx, r);
+                    shape.absarc(-dx, 0, r, Math.PI/2, -Math.PI/2, false);
+                } else {
+                    const r = w / 2;
+                    const dy = (h - w) / 2;
+                    shape.moveTo(r, -dy);
+                    shape.lineTo(r, dy);
+                    shape.absarc(0, dy, r, 0, Math.PI, false);
+                    shape.lineTo(-r, -dy);
+                    shape.absarc(0, -dy, r, Math.PI, 0, false);
+                }
+                shape.closePath();
+                geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+                geometry.translate(0, 0, -thickness/2);
             }
+        } else if (ap.type === 'P') {
+            // Regular polygon
+            const od = (ap.params[0] || 0.5) * scale;
+            const vertices = ap.params[1] || 4;
+            geometry = new THREE.CylinderGeometry(od/2, od/2, thickness, vertices);
+            geometry.rotateX(Math.PI / 2);
+        } else if (ap.type === 'POLY' && ap.vertices) {
+            // Custom polygon from macro
+            const shape = new THREE.Shape();
+            shape.moveTo(ap.vertices[0].x * scale, ap.vertices[0].y * scale);
+            for (let i = 1; i < ap.vertices.length; i++) {
+                shape.lineTo(ap.vertices[i].x * scale, ap.vertices[i].y * scale);
+            }
+            shape.closePath();
+            geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+            geometry.translate(0, 0, -thickness/2);
         } else {
+            // Fallback to circle
             const radius = (ap.params[0] || 0.5) / 2 * scale;
             geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
             geometry.rotateX(Math.PI / 2);
@@ -829,12 +867,17 @@ class GerberViewer {
     }
 
     buildDrillHoles(layer, centerX, centerY, scale, pcbThickness) {
-        const holeMaterial = new THREE.MeshPhongMaterial({
-            color: 0x1a1a1a,
-            shininess: 5,
-            polygonOffset: true,
-            polygonOffsetFactor: -4,
-            polygonOffsetUnits: -1
+        // Hole interior - use background color to simulate through-hole
+        const holeMaterial = new THREE.MeshBasicMaterial({
+            color: new THREE.Color(this.colors.bg),
+            side: THREE.DoubleSide
+        });
+
+        // Hole wall (inner cylinder wall)
+        const wallMaterial = new THREE.MeshPhongMaterial({
+            color: 0x3a3a3a,
+            shininess: 20,
+            side: THREE.DoubleSide
         });
 
         const ringMaterial = new THREE.MeshPhongMaterial({
@@ -851,28 +894,31 @@ class GerberViewer {
                 const y = (cmd.y - centerY) * scale;
                 const radius = (cmd.diameter / 2) * scale;
 
-                // Hole - more segments for round appearance
-                const holeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.5, 24);
-                holeGeom.rotateX(Math.PI / 2);
-                const holeMesh = new THREE.Mesh(holeGeom, holeMaterial);
-                holeMesh.position.set(x, y, 0);
-                holeMesh.matrixAutoUpdate = false;
-                holeMesh.updateMatrix();
-                this.pcbGroup.add(holeMesh);
+                // Create tube geometry for hole wall (hollow cylinder)
+                const tubeGeom = new THREE.CylinderGeometry(radius, radius, pcbThickness + 0.3, 24, 1, true);
+                tubeGeom.rotateX(Math.PI / 2);
+                const tubeMesh = new THREE.Mesh(tubeGeom, wallMaterial);
+                tubeMesh.position.set(x, y, 0);
+                tubeMesh.matrixAutoUpdate = false;
+                tubeMesh.updateMatrix();
+                this.pcbGroup.add(tubeMesh);
 
-                // Copper ring - more segments for round appearance
-                const ringGeom = new THREE.TorusGeometry(radius + 0.15 * scale, 0.15 * scale, 12, 24);
+                // Copper ring on top
+                const ringGeom = new THREE.RingGeometry(radius, radius + 0.25 * scale, 24);
                 const ringTop = new THREE.Mesh(ringGeom, ringMaterial);
-                ringTop.position.set(x, y, pcbThickness / 2 + 0.08);
+                ringTop.position.set(x, y, pcbThickness / 2 + 0.05);
                 ringTop.matrixAutoUpdate = false;
                 ringTop.updateMatrix();
                 this.pcbGroup.add(ringTop);
 
-                const ringBottom = new THREE.Mesh(ringGeom, ringMaterial);
-                ringBottom.position.set(x, y, -pcbThickness / 2 - 0.08);
+                // Copper ring on bottom
+                const ringBottom = new THREE.Mesh(ringGeom.clone(), ringMaterial);
+                ringBottom.position.set(x, y, -pcbThickness / 2 - 0.05);
+                ringBottom.rotation.x = Math.PI;
                 ringBottom.matrixAutoUpdate = false;
                 ringBottom.updateMatrix();
                 this.pcbGroup.add(ringBottom);
+
             } else if (cmd.type === 'slot') {
                 const x1 = (cmd.x1 - centerX) * scale;
                 const y1 = (cmd.y1 - centerY) * scale;
@@ -882,9 +928,9 @@ class GerberViewer {
                 const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
                 const angle = Math.atan2(y2 - y1, x2 - x1);
 
-                // Slot body with rounded ends (single extended box)
-                const slotGeom = new THREE.BoxGeometry(length + radius * 2, radius * 2, pcbThickness + 0.5);
-                const slotMesh = new THREE.Mesh(slotGeom, holeMaterial);
+                // Slot as dark rectangle (simplified)
+                const slotGeom = new THREE.BoxGeometry(length + radius * 2, radius * 2, pcbThickness + 0.3);
+                const slotMesh = new THREE.Mesh(slotGeom, wallMaterial);
                 slotMesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, 0);
                 slotMesh.rotation.z = angle;
                 slotMesh.matrixAutoUpdate = false;
