@@ -189,13 +189,6 @@
                         <button class="view-btn" data-view="all">Tutti</button>
                     </div>
                 </div>
-                <div class="view-section" style="margin-top:12px">
-                    <div class="view-label">Finitura Superficiale</div>
-                    <div class="view-grid-2">
-                        <button class="view-btn" data-finish="gold">Oro (ENIG)</button>
-                        <button class="view-btn" data-finish="silver">Argento</button>
-                    </div>
-                </div>
                 <div class="copper-toggle">
                     <button class="copper-btn" id="btnCopperOnly">&#128310; Solo Rame</button>
                 </div>
@@ -315,6 +308,7 @@ class GerberViewer {
 
         // Surface finish colors (applied to exposed pads)
         this.surfaceFinish = 'none'; // none, gold, silver
+        this.surfaceFinishVisible = true; // visibility toggle from layer panel
         this.finishColors = {
             gold: '#d4af37',   // Gold ENIG
             silver: '#c0c0c0' // Silver immersion
@@ -402,21 +396,6 @@ class GerberViewer {
                 document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.setView(btn.dataset.view);
-            };
-        });
-
-        // Surface finish selection (toggle on/off)
-        document.querySelectorAll('.view-btn[data-finish]').forEach(btn => {
-            btn.onclick = () => {
-                const wasActive = btn.classList.contains('active');
-                document.querySelectorAll('.view-btn[data-finish]').forEach(b => b.classList.remove('active'));
-                if (wasActive) {
-                    this.surfaceFinish = 'none';
-                } else {
-                    btn.classList.add('active');
-                    this.surfaceFinish = btn.dataset.finish;
-                }
-                this.render();
             };
         });
 
@@ -1565,14 +1544,6 @@ class GerberViewer {
             for (const l of sorted) {
                 if (isLayerVisible(l) && (l.type === 'copper' || l.type === 'inner')) this.renderLayer(l, ctx);
             }
-            // Surface finish on exposed pads (visible in copper-only mode)
-            if (this.surfaceFinish !== 'none') {
-                for (const l of sorted) {
-                    if (isLayerVisible(l) && l.type === 'mask') {
-                        this.renderSurfaceFinish(l, ctx);
-                    }
-                }
-            }
         } else {
             // 1. Inner layers (if visible)
             for (const l of sorted) {
@@ -1584,16 +1555,7 @@ class GerberViewer {
                 if (isLayerVisible(l) && l.type === 'copper') this.renderLayer(l, ctx);
             }
 
-            // 3. Surface finish layer (on exposed pads before mask)
-            if (this.surfaceFinish !== 'none') {
-                for (const l of sorted) {
-                    if (isLayerVisible(l) && l.type === 'mask') {
-                        this.renderSurfaceFinish(l, ctx);
-                    }
-                }
-            }
-
-            // 4. Solder mask
+            // 3. Solder mask
             for (const l of sorted) {
                 if (isLayerVisible(l) && l.type === 'mask') {
                     ctx.globalAlpha = 0.78;
@@ -1602,13 +1564,22 @@ class GerberViewer {
                 }
             }
 
-            // 5. Silkscreen
+            // 4. Silkscreen
             for (const l of sorted) {
                 if (isLayerVisible(l) && l.type === 'silk') this.renderLayer(l, ctx);
             }
         }
 
-        // 5. Drills (always visible on both sides)
+        // 5. Surface finish (on top of mask, visible in both modes)
+        if (this.surfaceFinish !== 'none' && this.surfaceFinishVisible) {
+            for (const l of sorted) {
+                if (isLayerVisible(l) && l.type === 'mask') {
+                    this.renderSurfaceFinish(l, ctx);
+                }
+            }
+        }
+
+        // 6. Drills (always visible on both sides)
         for (const l of sorted) {
             if (l.visible && l.type === 'drill') this.renderDrillLayer(l, ctx);
         }
@@ -2097,12 +2068,44 @@ class GerberViewer {
     }
 
     updateLayerList() {
-        document.getElementById('layerList').innerHTML = this.layers.length ? this.layers.map((l, i) => `
-            <div class="layer-item" onclick="viewer.toggleLayer(${i})">
-                <div class="layer-toggle ${l.visible ? 'on' : ''}"></div>
-                <div class="layer-color" style="background:${l.color}"></div>
-                <span class="layer-name">${l.name}</span>
-            </div>`).join('') : '<div style="color:var(--text2);text-align:center;padding:16px">Nessun layer</div>';
+        let html = '';
+        if (this.layers.length) {
+            html = this.layers.map((l, i) => `
+                <div class="layer-item" onclick="viewer.toggleLayer(${i})">
+                    <div class="layer-toggle ${l.visible ? 'on' : ''}"></div>
+                    <div class="layer-color" style="background:${l.color}"></div>
+                    <span class="layer-name">${l.name}</span>
+                </div>`).join('');
+
+            // Add surface finish layer entry
+            const finishColor = this.surfaceFinish !== 'none' ? this.finishColors[this.surfaceFinish] : '#666';
+            html += `
+                <div class="layer-item" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px">
+                    <div class="layer-toggle ${this.surfaceFinishVisible ? 'on' : ''}" onclick="event.stopPropagation();viewer.toggleFinishVisibility()"></div>
+                    <div class="layer-color" style="background:${finishColor}"></div>
+                    <span class="layer-name" style="flex:1">Finitura</span>
+                    <select onchange="viewer.setFinishType(this.value);event.stopPropagation()" onclick="event.stopPropagation()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:11px">
+                        <option value="none" ${this.surfaceFinish === 'none' ? 'selected' : ''}>Nessuna</option>
+                        <option value="gold" ${this.surfaceFinish === 'gold' ? 'selected' : ''}>Oro</option>
+                        <option value="silver" ${this.surfaceFinish === 'silver' ? 'selected' : ''}>Argento</option>
+                    </select>
+                </div>`;
+        } else {
+            html = '<div style="color:var(--text2);text-align:center;padding:16px">Nessun layer</div>';
+        }
+        document.getElementById('layerList').innerHTML = html;
+    }
+
+    toggleFinishVisibility() {
+        this.surfaceFinishVisible = !this.surfaceFinishVisible;
+        this.updateLayerList();
+        this.render();
+    }
+
+    setFinishType(type) {
+        this.surfaceFinish = type;
+        this.updateLayerList();
+        this.render();
     }
 
     toggleLayer(i) {
