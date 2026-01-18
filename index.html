@@ -100,7 +100,7 @@
         .loading.show { display:grid; }
         .spinner { width:44px; height:44px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
         @keyframes spin { to { transform:rotate(360deg); } }
-        .measure-info { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--accent); border-radius:8px; padding:12px 20px; font-size:13px; display:none; z-index:50; }
+        .measure-info { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--accent); border-radius:8px; padding:12px 20px; font-size:13px; display:none; z-index:50; text-align:center; min-width:280px; }
         .measure-info.show { display:block; }
         .measure-value { color:var(--accent); font-weight:700; font-size:16px; }
         .drc-panel { position:fixed; right:20px; top:70px; width:320px; background:var(--panel); border:1px solid var(--border); border-radius:10px; z-index:200; display:none; max-height:calc(100vh - 100px); overflow-y:auto; }
@@ -267,7 +267,9 @@
             </div>
             <div class="loading" id="loading"><div class="spinner"></div></div>
             <div class="measure-info" id="measureInfo">
-                Distanza: <span class="measure-value" id="measureValue">0.00 mm</span>
+                <div>Distanza: <span class="measure-value" id="measureValue">0.00 mm</span></div>
+                <div style="font-size:11px;color:var(--text2);margin-top:4px" id="measureDetails"></div>
+                <div style="font-size:10px;color:var(--text2);margin-top:6px">Click: nuovo punto | Tasto destro/ESC: annulla</div>
             </div>
         </div>
     </main>
@@ -323,6 +325,7 @@ class GerberViewer {
         this.measuring = false;
         this.measureStart = null;
         this.measureEnd = null;
+        this.tempMeasureEnd = null;
         this.snapMode = false;
         this.snapDistance = 1.5; // Snap distance in mm
 
@@ -454,7 +457,8 @@ class GerberViewer {
 
         container.onmousedown = e => {
             if (this.mode !== '2d') return;
-            if (this.measuring) {
+            // Left click only for measuring
+            if (this.measuring && e.button === 0) {
                 let coords = this.screenToWorld(e.clientX, e.clientY);
                 // Apply snap if enabled
                 if (this.snapMode) {
@@ -462,18 +466,50 @@ class GerberViewer {
                     if (snapped) coords = snapped;
                 }
                 if (!this.measureStart) {
+                    // Start new measurement, clear any previous
+                    this.measureEnd = null;
                     this.measureStart = coords;
-                } else {
+                    document.getElementById('measureInfo').classList.remove('show');
+                } else if (!this.measureEnd) {
+                    // Complete measurement
                     this.measureEnd = coords;
                     this.showMeasurement();
                     this.render();
+                } else {
+                    // Start new measurement after completing previous
+                    this.measureStart = coords;
+                    this.measureEnd = null;
+                    document.getElementById('measureInfo').classList.remove('show');
                 }
+                this.render();
                 return;
             }
-            this.drag = true;
-            this.lastMouse = {x:e.clientX, y:e.clientY};
-            this.canvas2d.style.cursor = 'grabbing';
+            if (e.button === 0) {
+                this.drag = true;
+                this.lastMouse = {x:e.clientX, y:e.clientY};
+                this.canvas2d.style.cursor = 'grabbing';
+            }
         };
+
+        // Right-click to cancel/reset measurement
+        container.oncontextmenu = e => {
+            if (this.mode !== '2d' || !this.measuring) return;
+            e.preventDefault();
+            this.measureStart = null;
+            this.measureEnd = null;
+            document.getElementById('measureInfo').classList.remove('show');
+            this.render();
+        };
+
+        // ESC key to cancel measurement
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && this.measuring) {
+                this.measureStart = null;
+                this.measureEnd = null;
+                document.getElementById('measureInfo').classList.remove('show');
+                this.render();
+            }
+        });
 
         container.onmousemove = e => {
             if (this.mode !== '2d') return;
@@ -484,10 +520,9 @@ class GerberViewer {
                     const snapped = this.findSnapPoint(coords);
                     if (snapped) coords = snapped;
                 }
-                this.measureEnd = coords;
-                this.showMeasurement();
+                this.tempMeasureEnd = coords;
+                this.showMeasurement(true);
                 this.render();
-                this.measureEnd = null;
             }
             if (!this.drag) return;
             this.pan.x += e.clientX - this.lastMouse.x;
@@ -527,12 +562,14 @@ class GerberViewer {
         return { x, y };
     }
 
-    showMeasurement() {
-        if (!this.measureStart || !this.measureEnd) return;
-        const dx = this.measureEnd.x - this.measureStart.x;
-        const dy = this.measureEnd.y - this.measureStart.y;
+    showMeasurement(isPreview = false) {
+        const endPoint = isPreview ? this.tempMeasureEnd : this.measureEnd;
+        if (!this.measureStart || !endPoint) return;
+        const dx = endPoint.x - this.measureStart.x;
+        const dy = endPoint.y - this.measureStart.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         document.getElementById('measureValue').textContent = dist.toFixed(3) + ' mm';
+        document.getElementById('measureDetails').textContent = `ΔX: ${dx.toFixed(3)} mm | ΔY: ${dy.toFixed(3)} mm`;
         document.getElementById('measureInfo').classList.add('show');
     }
 
@@ -1604,7 +1641,7 @@ class GerberViewer {
 
         // Draw measurement line
         if (this.measuring && this.measureStart) {
-            const end = this.measureEnd || this.measureStart;
+            const end = this.measureEnd || this.tempMeasureEnd || this.measureStart;
             ctx.save();
             ctx.strokeStyle = '#22c55e';
             ctx.lineWidth = 2;
@@ -1619,10 +1656,11 @@ class GerberViewer {
             ctx.lineTo(endScreen.x, endScreen.y);
             ctx.stroke();
 
-            // Draw endpoints
+            // Draw endpoints (larger for better visibility)
             ctx.fillStyle = '#22c55e';
+            ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(startScreen.x, startScreen.y, 5, 0, Math.PI * 2);
+            ctx.arc(startScreen.x, startScreen.y, 6, 0, Math.PI * 2);
             ctx.fill();
             ctx.beginPath();
             ctx.arc(endScreen.x, endScreen.y, 5, 0, Math.PI * 2);
@@ -1955,27 +1993,28 @@ class GerberViewer {
         }
 
         // Add physical drill holes to the board shape
+        // Holes must be wound in opposite direction (clockwise)
         for (const layer of this.layers) {
             if (layer.type === 'drill') {
                 for (const cmd of layer.cmds) {
                     if (cmd.type === 'drill') {
-                        // Create circular hole
+                        // Create circular hole (clockwise winding)
                         const holePath = new THREE.Path();
                         const segments = 24;
                         const r = cmd.diameter / 2;
                         const hx = cmd.x - cx;
                         const hy = cmd.y - cy;
-                        for (let i = 0; i <= segments; i++) {
+                        // Go clockwise (negative angle direction)
+                        for (let i = segments; i >= 0; i--) {
                             const angle = (i / segments) * Math.PI * 2;
                             const px = hx + r * Math.cos(angle);
                             const py = hy + r * Math.sin(angle);
-                            if (i === 0) holePath.moveTo(px, py);
+                            if (i === segments) holePath.moveTo(px, py);
                             else holePath.lineTo(px, py);
                         }
-                        holePath.closePath();
                         boardShape.holes.push(holePath);
                     } else if (cmd.type === 'slot') {
-                        // Create slot hole (obround shape)
+                        // Create slot hole (obround shape, clockwise)
                         const slotPath = new THREE.Path();
                         const r = cmd.diameter / 2;
                         const x1 = cmd.x1 - cx;
@@ -1988,13 +2027,12 @@ class GerberViewer {
                         if (len > 0.001) {
                             const nx = -dy / len;
                             const ny = dx / len;
-                            // Create obround path
-                            slotPath.moveTo(x1 + nx * r, y1 + ny * r);
-                            slotPath.lineTo(x2 + nx * r, y2 + ny * r);
-                            slotPath.absarc(x2, y2, r, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
-                            slotPath.lineTo(x1 - nx * r, y1 - ny * r);
-                            slotPath.absarc(x1, y1, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
-                            slotPath.closePath();
+                            // Create obround path (clockwise)
+                            slotPath.moveTo(x1 - nx * r, y1 - ny * r);
+                            slotPath.lineTo(x2 - nx * r, y2 - ny * r);
+                            slotPath.absarc(x2, y2, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
+                            slotPath.lineTo(x1 + nx * r, y1 + ny * r);
+                            slotPath.absarc(x1, y1, r, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
                             boardShape.holes.push(slotPath);
                         }
                     }
