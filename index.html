@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gerber Viewer Pro v23</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <style>
         :root { --bg:#0c0c0c; --panel:#141414; --surface:#1e1e1e; --border:#2a2a2a; --text:#e0e0e0; --text2:#666; --accent:#22c55e; }
         * { margin:0; padding:0; box-sizing:border-box; }
@@ -90,9 +88,11 @@
         .tool-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
         .tool-sep { width:1px; height:24px; background:var(--border); margin:0 4px; }
         .zoom-display { font-size:12px; color:var(--text); min-width:55px; text-align:center; }
-        .canvas-container { flex:1; position:relative; overflow:hidden; }
-        #canvas2d { position:absolute; top:0; left:0; width:100%; height:100%; cursor:grab; }
-        #canvas3d { position:absolute; top:0; left:0; width:100%; height:100%; display:none; }
+        .canvas-container { flex:1; position:relative; overflow:hidden; display:flex; flex-direction:row; }
+        #canvas2d { flex:1; cursor:grab; }
+        #canvas2dBottom { flex:1; cursor:grab; display:none; border-left:2px solid var(--border); }
+        .canvas-container.dual-view #canvas2d { flex:1; }
+        .canvas-container.dual-view #canvas2dBottom { display:block; flex:1; }
         .empty-state { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text2); }
         .empty-icon { font-size:72px; margin-bottom:20px; opacity:.2; }
         .empty-title { font-size:20px; margin-bottom:8px; color:var(--text); }
@@ -185,26 +185,12 @@
             <div class="panel-header">&#128065; Vista</div>
             <div class="panel-body">
                 <div class="view-section">
-                    <div class="view-label">Modalita</div>
-                    <div class="view-grid-2">
-                        <button class="view-btn active" data-mode="2d">2D</button>
-                        <button class="view-btn" data-mode="3d">3D</button>
-                    </div>
-                </div>
-                <div class="view-section">
                     <div class="view-label">Lato</div>
                     <div class="view-grid">
                         <button class="view-btn active" data-view="top">Top</button>
                         <button class="view-btn" data-view="bottom">Bottom</button>
                         <button class="view-btn" data-view="all">Tutti</button>
-                    </div>
-                </div>
-                <div class="view-section">
-                    <div class="view-label">Rotazione</div>
-                    <div class="view-grid">
-                        <button class="view-btn active" data-rot="0">0&#176;</button>
-                        <button class="view-btn" data-rot="90">90&#176;</button>
-                        <button class="view-btn" data-rot="180">180&#176;</button>
+                        <button class="view-btn" data-view="both">Entrambi</button>
                     </div>
                 </div>
                 <div class="copper-toggle">
@@ -254,12 +240,17 @@
             <button class="tool-btn" id="btnFlipH" title="Specchia H">&#8596;</button>
             <button class="tool-btn" id="btnFlipV" title="Specchia V">&#8597;</button>
             <div class="tool-sep"></div>
+            <button class="tool-btn" id="btnRot0" title="Rotazione 0°">0°</button>
+            <button class="tool-btn" id="btnRot90" title="Rotazione 90°">90°</button>
+            <button class="tool-btn" id="btnRot180" title="Rotazione 180°">180°</button>
+            <button class="tool-btn" id="btnRot270" title="Rotazione 270°">270°</button>
+            <div class="tool-sep"></div>
             <button class="tool-btn" id="btnMeasure" title="Misura distanza">&#128207;</button>
             <button class="tool-btn" id="btnSnap" title="Snap a fori/pad">&#127919;</button>
         </div>
         <div class="canvas-container" id="canvasContainer">
-            <canvas id="canvas2d" style="display:none"></canvas>
-            <div id="canvas3d"></div>
+            <canvas id="canvas2d"></canvas>
+            <canvas id="canvas2dBottom" style="display:none"></canvas>
             <div class="empty-state" id="emptyState">
                 <div class="empty-icon">&#9643;</div>
                 <div class="empty-title">Carica file Gerber</div>
@@ -318,8 +309,12 @@ class GerberViewer {
         this.flipV = false;
         this.colors = { bg:'#0c0c0c', mask:'#14532d', silk:'#f5f5f4', copper:'#b45309', fr4:'#c19a6b' };
         this.copperOnly = false;
-        this.mode = '2d';
         this.currentView = 'top';
+        this.dualView = false;
+
+        // Second canvas for dual view
+        this.canvas2dBottom = document.getElementById('canvas2dBottom');
+        this.ctxBottom = this.canvas2dBottom.getContext('2d');
 
         // Measure tool
         this.measuring = false;
@@ -328,13 +323,6 @@ class GerberViewer {
         this.tempMeasureEnd = null;
         this.snapMode = false;
         this.snapDistance = 1.5; // Snap distance in mm
-
-        // 3D
-        this.scene = null;
-        this.camera = null;
-        this.renderer = null;
-        this.controls = null;
-        this.pcbMesh = null;
 
         // Gerber X2 attributes
         this.x2Attributes = {};
@@ -403,16 +391,7 @@ class GerberViewer {
             this.copperOnly = !this.copperOnly;
             document.getElementById('btnCopperOnly').classList.toggle('active', this.copperOnly);
             this.render();
-            if (this.mode === '3d') this.update3D();
         };
-
-        document.querySelectorAll('.view-btn[data-mode]').forEach(btn => {
-            btn.onclick = () => {
-                document.querySelectorAll('.view-btn[data-mode]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.setMode(btn.dataset.mode);
-            };
-        });
 
         document.querySelectorAll('.view-btn[data-view]').forEach(btn => {
             btn.onclick = () => {
@@ -422,14 +401,22 @@ class GerberViewer {
             };
         });
 
-        document.querySelectorAll('.view-btn[data-rot]').forEach(btn => {
-            btn.onclick = () => {
-                document.querySelectorAll('.view-btn[data-rot]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.rotation = parseInt(btn.dataset.rot);
+        // Rotation buttons in toolbar
+        const rotButtons = [
+            { id: 'btnRot0', rot: 0 },
+            { id: 'btnRot90', rot: 90 },
+            { id: 'btnRot180', rot: 180 },
+            { id: 'btnRot270', rot: 270 }
+        ];
+        rotButtons.forEach(({ id, rot }) => {
+            document.getElementById(id).onclick = () => {
+                rotButtons.forEach(b => document.getElementById(b.id).classList.remove('active'));
+                document.getElementById(id).classList.add('active');
+                this.rotation = rot;
                 this.render();
             };
         });
+        document.getElementById('btnRot0').classList.add('active');
 
         document.querySelectorAll('.color-preset').forEach(preset => {
             preset.onclick = () => {
@@ -443,20 +430,16 @@ class GerberViewer {
                 });
                 this.updateLayerList();
                 this.render();
-                if (this.mode === '3d') this.update3D();
             };
         });
 
         const container = document.getElementById('canvasContainer');
         container.onwheel = e => {
-            if (this.mode === '2d') {
-                e.preventDefault();
-                this.setZoom(this.zoom * (e.deltaY < 0 ? 1.15 : 0.87));
-            }
+            e.preventDefault();
+            this.setZoom(this.zoom * (e.deltaY < 0 ? 1.15 : 0.87));
         };
 
         container.onmousedown = e => {
-            if (this.mode !== '2d') return;
             // Shift+click during measuring = pan mode
             if (this.measuring && e.shiftKey && e.button === 0) {
                 this.drag = true;
@@ -500,7 +483,7 @@ class GerberViewer {
 
         // Right-click to cancel/reset measurement
         container.oncontextmenu = e => {
-            if (this.mode !== '2d' || !this.measuring) return;
+            if (!this.measuring) return;
             e.preventDefault();
             this.measureStart = null;
             this.measureEnd = null;
@@ -519,7 +502,6 @@ class GerberViewer {
         });
 
         container.onmousemove = e => {
-            if (this.mode !== '2d') return;
             // Pan during measurement with Shift held
             if (this.drag) {
                 this.pan.x += e.clientX - this.lastMouse.x;
@@ -542,15 +524,13 @@ class GerberViewer {
         };
 
         container.onmouseup = container.onmouseleave = (e) => {
-            if (this.mode !== '2d') return;
             this.drag = false;
             this.canvas2d.style.cursor = this.measuring ? 'crosshair' : 'grab';
         };
 
         window.onresize = () => {
             if (this.layers.length) {
-                if (this.mode === '2d') this.fit();
-                else this.resize3D();
+                this.fit();
             }
         };
     }
@@ -677,65 +657,28 @@ class GerberViewer {
         return bestPoint;
     }
 
-    setMode(mode) {
-        this.mode = mode;
-        if (mode === '2d') {
-            this.canvas2d.style.display = 'block';
-            document.getElementById('canvas3d').style.display = 'none';
-            this.stop3DAnimation();
-            // Restore TOP view when returning to 2D
-            document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
-            document.querySelector('.view-btn[data-view="top"]').classList.add('active');
-            this.setView('top');
-            this.fit();
-        } else {
-            this.canvas2d.style.display = 'none';
-            document.getElementById('canvas3d').style.display = 'block';
-            // Enable all layers for 3D view
-            this.layers.forEach(l => l.visible = true);
-            this.updateLayerList();
-            document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
-            document.querySelector('.view-btn[data-view="all"]').classList.add('active');
-            this.currentView = 'all';
-            this.init3D();
-            this.update3D();
-            this.start3DAnimation();
-        }
-    }
-
-    stop3DAnimation() {
-        if (this.animationId) {
-            cancelAnimationFrame(this.animationId);
-            this.animationId = null;
-        }
-    }
-
-    start3DAnimation() {
-        if (this.animationId) return;
-        const animate = () => {
-            if (this.mode !== '3d') {
-                this.animationId = null;
-                return;
-            }
-            this.animationId = requestAnimationFrame(animate);
-            if (this.controls) this.controls.update();
-            if (this.renderer && this.scene && this.camera) {
-                this.renderer.render(this.scene, this.camera);
-            }
-        };
-        animate();
-    }
-
     setView(view) {
         this.currentView = view;
-        this.layers.forEach(l => {
-            if (view === 'all') l.visible = true;
-            else if (view === 'top') l.visible = l.side === 'top' || l.side === 'both';
-            else if (view === 'bottom') l.visible = l.side === 'bottom' || l.side === 'both';
-        });
+        const container = document.getElementById('canvasContainer');
+
+        if (view === 'both') {
+            // Dual view mode - show both canvases
+            this.dualView = true;
+            container.classList.add('dual-view');
+            // For dual view, show all layers on both canvases
+            this.layers.forEach(l => l.visible = true);
+        } else {
+            // Single view mode
+            this.dualView = false;
+            container.classList.remove('dual-view');
+            this.layers.forEach(l => {
+                if (view === 'all') l.visible = true;
+                else if (view === 'top') l.visible = l.side === 'top' || l.side === 'both';
+                else if (view === 'bottom') l.visible = l.side === 'bottom' || l.side === 'both';
+            });
+        }
         this.updateLayerList();
-        this.render();
-        if (this.mode === '3d') this.update3D();
+        this.fit();
     }
 
     async loadFiles(fileList) {
@@ -1517,16 +1460,34 @@ class GerberViewer {
     fit() {
         if (!this.bounds) return;
         const rect = document.getElementById('canvasContainer').getBoundingClientRect();
-        this.canvas2d.width = rect.width;
-        this.canvas2d.height = rect.height;
 
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
-        const sw = (rect.width - 80) / bw;
-        const sh = (rect.height - 80) / bh;
-        this.ppm = Math.min(sw, sh);
-        this.zoom = 1;
-        this.pan = { x: (rect.width - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
+
+        if (this.dualView) {
+            // Dual view - split horizontally, each canvas gets half width
+            const canvasWidth = Math.floor((rect.width - 2) / 2); // 2px for border
+            this.canvas2d.width = canvasWidth;
+            this.canvas2d.height = rect.height;
+            this.canvas2dBottom.width = canvasWidth;
+            this.canvas2dBottom.height = rect.height;
+
+            const sw = (canvasWidth - 40) / bw;
+            const sh = (rect.height - 40) / bh;
+            this.ppm = Math.min(sw, sh);
+            this.zoom = 1;
+            this.pan = { x: (canvasWidth - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
+        } else {
+            // Single view - full width
+            this.canvas2d.width = rect.width;
+            this.canvas2d.height = rect.height;
+
+            const sw = (rect.width - 80) / bw;
+            const sh = (rect.height - 80) / bh;
+            this.ppm = Math.min(sw, sh);
+            this.zoom = 1;
+            this.pan = { x: (rect.width - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
+        }
         this.updateZoomDisplay();
         this.render();
     }
@@ -1555,13 +1516,23 @@ class GerberViewer {
     render() {
         if (!this.bounds || !this.layers.length) return;
 
-        const ctx = this.ctx;
+        if (this.dualView) {
+            // Dual view: render TOP to left canvas, BOTTOM to right canvas
+            this.renderToCanvas(this.ctx, this.canvas2d, 'top');
+            this.renderToCanvas(this.ctxBottom, this.canvas2dBottom, 'bottom');
+        } else {
+            // Single view: render current view
+            this.renderToCanvas(this.ctx, this.canvas2d, this.currentView);
+        }
+    }
+
+    renderToCanvas(ctx, canvas, viewSide) {
         const scale = this.ppm * this.zoom;
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
 
         ctx.fillStyle = this.colors.bg;
-        ctx.fillRect(0, 0, this.canvas2d.width, this.canvas2d.height);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         ctx.save();
         ctx.translate(this.pan.x, this.pan.y);
@@ -1573,6 +1544,10 @@ class GerberViewer {
 
         // Flip Y to match Gerber coordinate system (Y grows up)
         ctx.scale(1, -1);
+
+        // For bottom view, also flip horizontally to show as mirrored
+        const isBottom = viewSide === 'bottom';
+        if (isBottom) ctx.scale(-1, 1);
 
         if (this.rotation) ctx.rotate(-this.rotation * Math.PI / 180);
         if (this.flipH) ctx.scale(-1, 1);
@@ -1596,24 +1571,33 @@ class GerberViewer {
 
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
 
+        // Filter layers based on view side
+        const isLayerVisible = (l) => {
+            if (!l.visible) return false;
+            if (viewSide === 'all') return true;
+            if (viewSide === 'top') return l.side === 'top' || l.side === 'both';
+            if (viewSide === 'bottom') return l.side === 'bottom' || l.side === 'both';
+            return true;
+        };
+
         if (this.copperOnly) {
             for (const l of sorted) {
-                if (l.visible && (l.type === 'copper' || l.type === 'inner')) this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && (l.type === 'copper' || l.type === 'inner')) this.renderLayer(l, ctx);
             }
         } else {
             // 1. Inner layers (if visible)
             for (const l of sorted) {
-                if (l.visible && l.type === 'inner') this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && l.type === 'inner') this.renderLayer(l, ctx);
             }
 
             // 2. Copper
             for (const l of sorted) {
-                if (l.visible && l.type === 'copper') this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && l.type === 'copper') this.renderLayer(l, ctx);
             }
 
             // 3. Solder mask
             for (const l of sorted) {
-                if (l.visible && l.type === 'mask') {
+                if (isLayerVisible(l) && l.type === 'mask') {
                     ctx.globalAlpha = 0.78;
                     this.renderSolderMask(l, ctx);
                     ctx.globalAlpha = 1;
@@ -1622,11 +1606,11 @@ class GerberViewer {
 
             // 4. Silkscreen
             for (const l of sorted) {
-                if (l.visible && l.type === 'silk') this.renderLayer(l, ctx);
+                if (isLayerVisible(l) && l.type === 'silk') this.renderLayer(l, ctx);
             }
         }
 
-        // 5. Drills
+        // 5. Drills (always visible on both sides)
         for (const l of sorted) {
             if (l.visible && l.type === 'drill') this.renderDrillLayer(l, ctx);
         }
@@ -1649,8 +1633,18 @@ class GerberViewer {
 
         ctx.restore();
 
-        // Draw measurement line
-        if (this.measuring && this.measureStart) {
+        // Draw view label in dual view mode
+        if (this.dualView) {
+            ctx.save();
+            ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, sans-serif';
+            ctx.fillStyle = '#22c55e';
+            ctx.textAlign = 'center';
+            ctx.fillText(viewSide.toUpperCase(), canvas.width / 2, 20);
+            ctx.restore();
+        }
+
+        // Draw measurement line (only on main canvas)
+        if (canvas === this.canvas2d && this.measuring && this.measureStart) {
             const end = this.measureEnd || this.tempMeasureEnd || this.measureStart;
             ctx.save();
             ctx.strokeStyle = '#22c55e';
@@ -1893,672 +1887,6 @@ class GerberViewer {
         ctx.restore();
     }
 
-    // 3D Rendering
-    init3D() {
-        if (this.renderer) return;
-
-        const container = document.getElementById('canvas3d');
-        const rect = container.getBoundingClientRect();
-
-        this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x0c0c0c);
-
-        this.camera = new THREE.PerspectiveCamera(45, rect.width / rect.height, 0.1, 1000);
-        this.camera.position.set(0, -100, 80);
-
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        this.renderer.setSize(rect.width, rect.height);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
-        container.appendChild(this.renderer.domElement);
-
-        this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
-        // Disable damping to avoid flywheel effect
-        this.controls.enableDamping = false;
-        this.controls.rotateSpeed = 0.8;
-        this.controls.zoomSpeed = 1.0;
-        this.controls.panSpeed = 0.8;
-        // Allow full rotation (no constraints)
-        this.controls.minPolarAngle = 0;
-        this.controls.maxPolarAngle = Math.PI;
-
-        // Lights - ambient for base illumination
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-        this.scene.add(ambientLight);
-
-        // Directional lights attached to camera for consistent illumination
-        // regardless of rotation angle
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
-        directionalLight.position.set(0, 0, 1); // Light from camera direction
-        this.camera.add(directionalLight);
-
-        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
-        directionalLight2.position.set(0, 1, 0.5); // Light from above-camera
-        this.camera.add(directionalLight2);
-
-        // Add camera to scene so camera-attached lights work
-        this.scene.add(this.camera);
-    }
-
-    resize3D() {
-        if (!this.renderer) return;
-        const container = document.getElementById('canvas3d');
-        const rect = container.getBoundingClientRect();
-        this.camera.aspect = rect.width / rect.height;
-        this.camera.updateProjectionMatrix();
-        this.renderer.setSize(rect.width, rect.height);
-    }
-
-    update3D() {
-        if (!this.bounds || !this.scene) return;
-
-        // Save camera position and controls target before rebuilding
-        const savedCameraPosition = this.camera ? this.camera.position.clone() : null;
-        const savedControlsTarget = this.controls ? this.controls.target.clone() : null;
-        const isFirstRender = !this.pcbMesh;
-
-        // Remove old PCB mesh
-        if (this.pcbMesh) {
-            this.scene.remove(this.pcbMesh);
-            this.pcbMesh.traverse(child => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) {
-                    if (Array.isArray(child.material)) {
-                        child.material.forEach(m => m.dispose());
-                    } else {
-                        child.material.dispose();
-                    }
-                }
-            });
-        }
-
-        this.pcbMesh = new THREE.Group();
-
-        const bw = this.bounds.maxX - this.bounds.minX;
-        const bh = this.bounds.maxY - this.bounds.minY;
-        const cx = (this.bounds.minX + this.bounds.maxX) / 2;
-        const cy = (this.bounds.minY + this.bounds.maxY) / 2;
-
-        // PCB thickness
-        const pcbThickness = 1.6;
-        const copperThickness = 0.035;
-        const maskThickness = 0.025;
-        const silkThickness = 0.015;
-
-        // Check if any drill layer is visible and collect holes
-        const drillHoles = [];
-        for (const layer of this.layers) {
-            if (layer.type === 'drill' && layer.visible) {
-                for (const cmd of layer.cmds) {
-                    drillHoles.push(cmd);
-                }
-            }
-        }
-
-        // FR4 base board with drill holes
-        const boardShape = this.createBoardShape(cx, cy, bw, bh);
-        this.addDrillHolesToShape(boardShape, drillHoles, cx, cy);
-
-        const fr4Geometry = new THREE.ExtrudeGeometry(boardShape, {
-            depth: pcbThickness,
-            bevelEnabled: false
-        });
-        const fr4Material = new THREE.MeshPhongMaterial({ color: 0xc19a6b });
-        const fr4Mesh = new THREE.Mesh(fr4Geometry, fr4Material);
-        fr4Mesh.position.z = -pcbThickness / 2;
-        this.pcbMesh.add(fr4Mesh);
-
-        // Sort layers
-        const sorted = [...this.layers].sort((a, b) => a.order - b.order);
-
-        // Copper only mode
-        if (this.copperOnly) {
-            for (const layer of sorted) {
-                if (!layer.visible) continue;
-                if (layer.type === 'copper') {
-                    const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                    this.addCopperLayer3D(layer, cx, cy, zPos, copperThickness, 0xb87333, drillHoles);
-                } else if (layer.type === 'inner') {
-                    const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
-                    this.addCopperLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles);
-                }
-            }
-        } else {
-            // Full rendering
-            // 1. Inner copper layers
-            for (const layer of sorted) {
-                if (!layer.visible || layer.type !== 'inner') continue;
-                const innerZ = (layer.order - 10) * 0.3 - pcbThickness / 4;
-                this.addCopperLayer3D(layer, cx, cy, innerZ, copperThickness, 0xcd7f32, drillHoles);
-            }
-
-            // 2. Copper layers (traces and pads only - not full board!)
-            for (const layer of sorted) {
-                if (!layer.visible || layer.type !== 'copper') continue;
-                const zPos = layer.side === 'top' ? pcbThickness / 2 : -pcbThickness / 2 - copperThickness;
-                this.addCopperLayer3D(layer, cx, cy, zPos, copperThickness, 0xb87333, drillHoles);
-            }
-
-            // 3. Solder mask (full board with pad openings and drill holes)
-            for (const layer of sorted) {
-                if (!layer.visible || layer.type !== 'mask') continue;
-                const zPos = layer.side === 'top'
-                    ? pcbThickness / 2 + copperThickness
-                    : -pcbThickness / 2 - copperThickness - maskThickness;
-                this.addMaskLayer3D(layer, cx, cy, zPos, maskThickness, this.colors.mask, drillHoles, bw, bh);
-            }
-
-            // 4. Silkscreen (individual elements only)
-            for (const layer of sorted) {
-                if (!layer.visible || layer.type !== 'silk') continue;
-                const zPos = layer.side === 'top'
-                    ? pcbThickness / 2 + copperThickness + maskThickness
-                    : -pcbThickness / 2 - copperThickness - maskThickness - silkThickness;
-                this.addSilkLayer3D(layer, cx, cy, zPos, silkThickness, this.colors.silk);
-            }
-        }
-
-        this.scene.add(this.pcbMesh);
-
-        // Restore camera position or set initial position
-        if (!isFirstRender && savedCameraPosition && savedControlsTarget) {
-            this.camera.position.copy(savedCameraPosition);
-            this.controls.target.copy(savedControlsTarget);
-        } else {
-            const maxDim = Math.max(bw, bh);
-            this.camera.position.set(0, -maxDim * 1.2, maxDim * 0.8);
-            this.controls.target.set(0, 0, 0);
-        }
-        this.controls.update();
-    }
-
-    createBoardShape(cx, cy, bw, bh) {
-        const boardShape = new THREE.Shape();
-        if (this.boardOutline?.length >= 3) {
-            boardShape.moveTo(this.boardOutline[0].x - cx, this.boardOutline[0].y - cy);
-            for (let i = 1; i < this.boardOutline.length; i++) {
-                boardShape.lineTo(this.boardOutline[i].x - cx, this.boardOutline[i].y - cy);
-            }
-        } else {
-            boardShape.moveTo(-bw/2, -bh/2);
-            boardShape.lineTo(bw/2, -bh/2);
-            boardShape.lineTo(bw/2, bh/2);
-            boardShape.lineTo(-bw/2, bh/2);
-        }
-        boardShape.closePath();
-        return boardShape;
-    }
-
-    addDrillHolesToShape(shape, drillHoles, cx, cy) {
-        const segments = 16; // Reduced for performance
-        for (const cmd of drillHoles) {
-            if (cmd.type === 'drill') {
-                const holePath = new THREE.Path();
-                const r = cmd.diameter / 2;
-                const hx = cmd.x - cx;
-                const hy = cmd.y - cy;
-                // Clockwise winding for holes
-                for (let i = segments; i >= 0; i--) {
-                    const angle = (i / segments) * Math.PI * 2;
-                    const px = hx + r * Math.cos(angle);
-                    const py = hy + r * Math.sin(angle);
-                    if (i === segments) holePath.moveTo(px, py);
-                    else holePath.lineTo(px, py);
-                }
-                shape.holes.push(holePath);
-            } else if (cmd.type === 'slot') {
-                const slotPath = new THREE.Path();
-                const r = cmd.diameter / 2;
-                const x1 = cmd.x1 - cx, y1 = cmd.y1 - cy;
-                const x2 = cmd.x2 - cx, y2 = cmd.y2 - cy;
-                const dx = x2 - x1, dy = y2 - y1;
-                const len = Math.sqrt(dx * dx + dy * dy);
-                if (len > 0.001) {
-                    const nx = -dy / len, ny = dx / len;
-                    slotPath.moveTo(x1 - nx * r, y1 - ny * r);
-                    slotPath.lineTo(x2 - nx * r, y2 - ny * r);
-                    slotPath.absarc(x2, y2, r, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
-                    slotPath.lineTo(x1 + nx * r, y1 + ny * r);
-                    slotPath.absarc(x1, y1, r, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
-                    shape.holes.push(slotPath);
-                }
-            }
-        }
-    }
-
-    // Copper layer - render individual traces, pads, regions (NOT full board!)
-    addCopperLayer3D(layer, cx, cy, zPos, thickness, color, drillHoles) {
-        const geometries = [];
-        const segments = 12; // Reduced for performance
-
-        for (const cmd of layer.cmds) {
-            if (cmd.polarity === 'clear') continue;
-
-            try {
-                if (cmd.type === 'region' && cmd.points?.length >= 3) {
-                    const shape = new THREE.Shape();
-                    shape.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
-                    for (let i = 1; i < cmd.points.length; i++) {
-                        shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
-                    }
-                    shape.closePath();
-                    // Add drill holes that intersect this region
-                    this.addDrillHolesToShape(shape, drillHoles, cx, cy);
-                    const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-                    geom.translate(0, 0, zPos);
-                    geometries.push(geom);
-                } else if (cmd.type === 'flash') {
-                    const geom = this.createFlashGeometry(cmd, cx, cy, zPos, thickness, segments);
-                    if (geom) geometries.push(geom);
-                } else if (cmd.type === 'line' && cmd.width > 0.001) {
-                    const geom = this.createLineGeometry(cmd, cx, cy, zPos, thickness, segments);
-                    if (geom) geometries.push(geom);
-                } else if (cmd.type === 'arc') {
-                    const geom = this.createArcGeometry(cmd, cx, cy, zPos, thickness);
-                    if (geom) geometries.push(geom);
-                }
-            } catch (e) {
-                // Skip invalid geometry
-            }
-        }
-
-        if (geometries.length > 0) {
-            // Merge all geometries into one for performance
-            const mergedGeometry = this.mergeGeometries(geometries);
-            if (mergedGeometry) {
-                const material = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide });
-                const mesh = new THREE.Mesh(mergedGeometry, material);
-                this.pcbMesh.add(mesh);
-            }
-            // Dispose individual geometries
-            geometries.forEach(g => g.dispose());
-        }
-    }
-
-    // Silkscreen - render individual elements only
-    addSilkLayer3D(layer, cx, cy, zPos, thickness, color) {
-        const geometries = [];
-        const segments = 8;
-
-        for (const cmd of layer.cmds) {
-            if (cmd.polarity === 'clear') continue;
-
-            try {
-                if (cmd.type === 'region' && cmd.points?.length >= 3) {
-                    const shape = new THREE.Shape();
-                    shape.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
-                    for (let i = 1; i < cmd.points.length; i++) {
-                        shape.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
-                    }
-                    shape.closePath();
-                    const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-                    geom.translate(0, 0, zPos);
-                    geometries.push(geom);
-                } else if (cmd.type === 'flash') {
-                    const geom = this.createFlashGeometry(cmd, cx, cy, zPos, thickness, segments);
-                    if (geom) geometries.push(geom);
-                } else if (cmd.type === 'line' && cmd.width > 0.001) {
-                    const geom = this.createLineGeometry(cmd, cx, cy, zPos, thickness, segments);
-                    if (geom) geometries.push(geom);
-                }
-            } catch (e) {
-                // Skip invalid geometry
-            }
-        }
-
-        if (geometries.length > 0) {
-            const mergedGeometry = this.mergeGeometries(geometries);
-            if (mergedGeometry) {
-                const colorHex = new THREE.Color(color).getHex();
-                const material = new THREE.MeshPhongMaterial({ color: colorHex, side: THREE.DoubleSide });
-                const mesh = new THREE.Mesh(mergedGeometry, material);
-                this.pcbMesh.add(mesh);
-            }
-            geometries.forEach(g => g.dispose());
-        }
-    }
-
-    createFlashGeometry(cmd, cx, cy, zPos, thickness, segments) {
-        const ap = cmd.aperture;
-        const x = cmd.x - cx;
-        const y = cmd.y - cy;
-
-        if (ap.type === 'C') {
-            const r = (ap.params[0] || 0.5) / 2;
-            const geom = new THREE.CylinderGeometry(r, r, thickness, segments);
-            geom.rotateX(Math.PI / 2);
-            geom.translate(x, y, zPos + thickness / 2);
-            return geom;
-        } else if (ap.type === 'R') {
-            const w = ap.params[0] || 0.5;
-            const h = ap.params.length > 1 ? ap.params[1] : w;
-            const geom = new THREE.BoxGeometry(w, h, thickness);
-            geom.translate(x, y, zPos + thickness / 2);
-            if (ap.rotation) {
-                const matrix = new THREE.Matrix4().makeRotationZ(ap.rotation * Math.PI / 180);
-                geom.applyMatrix4(matrix);
-            }
-            return geom;
-        } else if (ap.type === 'O') {
-            const w = ap.params[0] || 0.5;
-            const h = ap.params.length > 1 ? ap.params[1] : w;
-            const r = Math.min(w, h) / 2;
-            const shape = new THREE.Shape();
-            if (w > h) {
-                const dx = (w - h) / 2;
-                shape.moveTo(-dx, -r);
-                shape.lineTo(dx, -r);
-                shape.absarc(dx, 0, r, -Math.PI/2, Math.PI/2, false);
-                shape.lineTo(-dx, r);
-                shape.absarc(-dx, 0, r, Math.PI/2, -Math.PI/2, false);
-            } else {
-                const dy = (h - w) / 2;
-                shape.moveTo(r, -dy);
-                shape.lineTo(r, dy);
-                shape.absarc(0, dy, r, 0, Math.PI, false);
-                shape.lineTo(-r, -dy);
-                shape.absarc(0, -dy, r, Math.PI, 0, false);
-            }
-            shape.closePath();
-            const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: segments });
-            geom.translate(x, y, zPos);
-            return geom;
-        } else if (ap.type === 'P') {
-            const od = ap.params[0] || 0.5;
-            const vertices = ap.params[1] || 4;
-            const pRot = (ap.params[2] || 0) * Math.PI / 180;
-            const shape = new THREE.Shape();
-            for (let i = 0; i < vertices; i++) {
-                const angle = pRot + (i * 2 * Math.PI / vertices);
-                const px = (od / 2) * Math.cos(angle);
-                const py = (od / 2) * Math.sin(angle);
-                if (i === 0) shape.moveTo(px, py);
-                else shape.lineTo(px, py);
-            }
-            shape.closePath();
-            const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-            geom.translate(x, y, zPos);
-            return geom;
-        } else if (ap.type === 'POLY' && ap.vertices?.length >= 3) {
-            const shape = new THREE.Shape();
-            shape.moveTo(ap.vertices[0].x, ap.vertices[0].y);
-            for (let i = 1; i < ap.vertices.length; i++) {
-                shape.lineTo(ap.vertices[i].x, ap.vertices[i].y);
-            }
-            shape.closePath();
-            const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-            geom.translate(x, y, zPos);
-            return geom;
-        }
-        // Fallback circle
-        const geom = new THREE.CylinderGeometry(0.25, 0.25, thickness, segments);
-        geom.rotateX(Math.PI / 2);
-        geom.translate(x, y, zPos + thickness / 2);
-        return geom;
-    }
-
-    createLineGeometry(cmd, cx, cy, zPos, thickness, segments) {
-        const dx = cmd.x2 - cmd.x1;
-        const dy = cmd.y2 - cmd.y1;
-        const length = Math.sqrt(dx * dx + dy * dy);
-        if (length < 0.001) return null;
-
-        const angle = Math.atan2(dy, dx);
-        const width = cmd.width || 0.1;
-        const halfW = width / 2;
-
-        // Create rounded line shape
-        const shape = new THREE.Shape();
-        shape.moveTo(-length/2, -halfW);
-        shape.lineTo(length/2, -halfW);
-        shape.absarc(length/2, 0, halfW, -Math.PI/2, Math.PI/2, false);
-        shape.lineTo(-length/2, halfW);
-        shape.absarc(-length/2, 0, halfW, Math.PI/2, -Math.PI/2, false);
-        shape.closePath();
-
-        const geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: segments });
-        geom.translate(0, 0, zPos);
-
-        // Apply rotation and position
-        const matrix = new THREE.Matrix4();
-        matrix.makeRotationZ(angle);
-        geom.applyMatrix4(matrix);
-        geom.translate((cmd.x1 + cmd.x2) / 2 - cx, (cmd.y1 + cmd.y2) / 2 - cy, 0);
-
-        return geom;
-    }
-
-    createArcGeometry(cmd, cx, cy, zPos, thickness) {
-        // Convert arc to line segments
-        const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
-        if (pts.length < 2) return null;
-
-        const geometries = [];
-        let px = cmd.x1, py = cmd.y1;
-        const width = cmd.width || 0.1;
-
-        for (const p of pts) {
-            const dx = p.x - px;
-            const dy = p.y - py;
-            const length = Math.sqrt(dx * dx + dy * dy);
-            if (length > 0.001) {
-                const angle = Math.atan2(dy, dx);
-                const geom = new THREE.BoxGeometry(length + width, width, thickness);
-                geom.translate(0, 0, zPos + thickness / 2);
-                const matrix = new THREE.Matrix4().makeRotationZ(angle);
-                geom.applyMatrix4(matrix);
-                geom.translate((px + p.x) / 2 - cx, (py + p.y) / 2 - cy, 0);
-                geometries.push(geom);
-            }
-            px = p.x;
-            py = p.y;
-        }
-
-        if (geometries.length === 0) return null;
-        return this.mergeGeometries(geometries);
-    }
-
-    mergeGeometries(geometries) {
-        if (geometries.length === 0) return null;
-        if (geometries.length === 1) return geometries[0].clone();
-
-        // Manual merge since BufferGeometryUtils might not be available
-        let totalPositions = 0;
-        let totalNormals = 0;
-        let totalIndices = 0;
-
-        for (const geom of geometries) {
-            if (!geom.attributes.position) continue;
-            totalPositions += geom.attributes.position.count * 3;
-            if (geom.attributes.normal) totalNormals += geom.attributes.normal.count * 3;
-            if (geom.index) totalIndices += geom.index.count;
-            else totalIndices += geom.attributes.position.count;
-        }
-
-        const positions = new Float32Array(totalPositions);
-        const normals = totalNormals > 0 ? new Float32Array(totalNormals) : null;
-        const indices = [];
-
-        let posOffset = 0;
-        let normalOffset = 0;
-        let indexOffset = 0;
-        let vertexOffset = 0;
-
-        for (const geom of geometries) {
-            if (!geom.attributes.position) continue;
-
-            const pos = geom.attributes.position.array;
-            positions.set(pos, posOffset);
-            posOffset += pos.length;
-
-            if (normals && geom.attributes.normal) {
-                const norm = geom.attributes.normal.array;
-                normals.set(norm, normalOffset);
-                normalOffset += norm.length;
-            }
-
-            if (geom.index) {
-                const idx = geom.index.array;
-                for (let i = 0; i < idx.length; i++) {
-                    indices.push(idx[i] + vertexOffset);
-                }
-            } else {
-                for (let i = 0; i < geom.attributes.position.count; i++) {
-                    indices.push(i + vertexOffset);
-                }
-            }
-
-            vertexOffset += geom.attributes.position.count;
-        }
-
-        const merged = new THREE.BufferGeometry();
-        merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        if (normals) merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-        merged.setIndex(indices);
-        merged.computeVertexNormals();
-
-        return merged;
-    }
-
-    addMaskLayer3D(layer, cx, cy, zPos, thickness, color, drillHoles, bw, bh) {
-        const colorHex = new THREE.Color(color).getHex();
-        const material = new THREE.MeshPhongMaterial({
-            color: colorHex,
-            transparent: true,
-            opacity: 0.8,
-            side: THREE.DoubleSide
-        });
-
-        // Create mask shape from board outline
-        const maskShape = this.createBoardShape(cx, cy, bw, bh);
-
-        // Add drill holes
-        this.addDrillHolesToShape(maskShape, drillHoles, cx, cy);
-
-        // Add holes for each pad opening in the solder mask (clockwise winding)
-        const segments = 12;
-        for (const cmd of layer.cmds) {
-            if (cmd.polarity === 'clear') continue;
-
-            if (cmd.type === 'flash') {
-                const hole = this.createApertureHole(cmd.aperture, cmd.x - cx, cmd.y - cy, segments);
-                if (hole) maskShape.holes.push(hole);
-            } else if (cmd.type === 'region' && cmd.points?.length >= 3) {
-                // Regions in mask are pad openings - create clockwise holes
-                const hole = new THREE.Path();
-                // Reverse winding for holes
-                const pts = [...cmd.points].reverse();
-                hole.moveTo(pts[0].x - cx, pts[0].y - cy);
-                for (let i = 1; i < pts.length; i++) {
-                    hole.lineTo(pts[i].x - cx, pts[i].y - cy);
-                }
-                hole.closePath();
-                maskShape.holes.push(hole);
-            }
-        }
-
-        try {
-            const geometry = new THREE.ExtrudeGeometry(maskShape, { depth: thickness, bevelEnabled: false });
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.z = zPos;
-            this.pcbMesh.add(mesh);
-        } catch (e) {
-            // Skip if geometry creation fails
-        }
-    }
-
-    createApertureHole(ap, x, y, segments = 12) {
-        const hole = new THREE.Path();
-
-        if (ap.type === 'C') {
-            const r = (ap.params[0] || 0.5) / 2;
-            // Clockwise winding for holes
-            for (let i = segments; i >= 0; i--) {
-                const angle = (i / segments) * Math.PI * 2;
-                const px = x + r * Math.cos(angle);
-                const py = y + r * Math.sin(angle);
-                if (i === segments) hole.moveTo(px, py);
-                else hole.lineTo(px, py);
-            }
-            return hole;
-        } else if (ap.type === 'R') {
-            const w = ap.params[0] || 0.5;
-            const h = ap.params.length > 1 ? ap.params[1] : w;
-            const rot = (ap.rotation || 0) * Math.PI / 180;
-            // Clockwise corners
-            const corners = [
-                { x: -w/2, y: -h/2 },
-                { x: -w/2, y: h/2 },
-                { x: w/2, y: h/2 },
-                { x: w/2, y: -h/2 }
-            ];
-            for (let i = 0; i < corners.length; i++) {
-                let cx = corners[i].x, cy = corners[i].y;
-                if (rot) {
-                    const nx = cx * Math.cos(rot) - cy * Math.sin(rot);
-                    const ny = cx * Math.sin(rot) + cy * Math.cos(rot);
-                    cx = nx; cy = ny;
-                }
-                if (i === 0) hole.moveTo(x + cx, y + cy);
-                else hole.lineTo(x + cx, y + cy);
-            }
-            return hole;
-        } else if (ap.type === 'O') {
-            const w = ap.params[0] || 0.5;
-            const h = ap.params.length > 1 ? ap.params[1] : w;
-            const r = Math.min(w, h) / 2;
-
-            // Clockwise winding for obround holes
-            if (w > h) {
-                const dx = (w - h) / 2;
-                hole.moveTo(x + dx, y - r);
-                hole.lineTo(x - dx, y - r);
-                hole.absarc(x - dx, y, r, -Math.PI/2, Math.PI/2, true);
-                hole.lineTo(x + dx, y + r);
-                hole.absarc(x + dx, y, r, Math.PI/2, -Math.PI/2, true);
-            } else {
-                const dy = (h - w) / 2;
-                hole.moveTo(x + r, y + dy);
-                hole.lineTo(x + r, y - dy);
-                hole.absarc(x, y - dy, r, 0, Math.PI, true);
-                hole.lineTo(x - r, y + dy);
-                hole.absarc(x, y + dy, r, Math.PI, 0, true);
-            }
-            return hole;
-        } else if (ap.type === 'P') {
-            const od = ap.params[0] || 0.5;
-            const vertices = ap.params[1] || 4;
-            const pRot = (ap.params[2] || 0) * Math.PI / 180;
-            // Clockwise winding
-            for (let i = vertices - 1; i >= 0; i--) {
-                const angle = pRot + (i * 2 * Math.PI / vertices);
-                const px = x + (od / 2) * Math.cos(angle);
-                const py = y + (od / 2) * Math.sin(angle);
-                if (i === vertices - 1) hole.moveTo(px, py);
-                else hole.lineTo(px, py);
-            }
-            return hole;
-        } else if (ap.type === 'POLY' && ap.vertices?.length >= 3) {
-            // Reverse vertices for clockwise winding
-            const verts = [...ap.vertices].reverse();
-            hole.moveTo(x + verts[0].x, y + verts[0].y);
-            for (let i = 1; i < verts.length; i++) {
-                hole.lineTo(x + verts[i].x, y + verts[i].y);
-            }
-            return hole;
-        }
-
-        // Fallback: small circle clockwise
-        const r = 0.25;
-        for (let i = segments; i >= 0; i--) {
-            const angle = (i / segments) * Math.PI * 2;
-            const px = x + r * Math.cos(angle);
-            const py = y + r * Math.sin(angle);
-            if (i === segments) hole.moveTo(px, py);
-            else hole.lineTo(px, py);
-        }
-        return hole;
-    }
-
     // SVG Export - All layers separated
     exportSvg() {
         if (!this.bounds || !this.layers.length) return;
@@ -2755,7 +2083,6 @@ class GerberViewer {
         this.layers[i].visible = !this.layers[i].visible;
         this.updateLayerList();
         this.render();
-        if (this.mode === '3d') this.update3D();
     }
 
     removeFile(i) {
@@ -2782,14 +2109,12 @@ class GerberViewer {
         this.pads = [];
         this.nets = [];
         this.x2Attributes = {};
+        this.dualView = false;
+        document.getElementById('canvasContainer').classList.remove('dual-view');
         this.updateUI();
         this.updateStats();
         document.getElementById('emptyState').style.display = 'flex';
         this.canvas2d.style.display = 'none';
-        if (this.pcbMesh) {
-            this.scene.remove(this.pcbMesh);
-            this.pcbMesh = null;
-        }
     }
 
     exportPng() {
