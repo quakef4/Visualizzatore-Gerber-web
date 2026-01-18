@@ -191,9 +191,8 @@
                 </div>
                 <div class="view-section" style="margin-top:12px">
                     <div class="view-label">Finitura Superficiale</div>
-                    <div class="view-grid">
-                        <button class="view-btn active" data-finish="hasl">HASL</button>
-                        <button class="view-btn" data-finish="gold">Oro</button>
+                    <div class="view-grid-2">
+                        <button class="view-btn" data-finish="gold">Oro (ENIG)</button>
                         <button class="view-btn" data-finish="silver">Argento</button>
                     </div>
                 </div>
@@ -314,11 +313,10 @@ class GerberViewer {
         this.copperOnly = false;
         this.currentView = 'top';
 
-        // Surface finish colors
-        this.surfaceFinish = 'hasl'; // hasl, gold, silver
+        // Surface finish colors (applied to exposed pads)
+        this.surfaceFinish = 'none'; // none, gold, silver
         this.finishColors = {
-            hasl: '#b45309',   // Same as copper (tin-lead)
-            gold: '#ffd700',   // Gold ENIG
+            gold: '#d4af37',   // Gold ENIG
             silver: '#c0c0c0' // Silver immersion
         };
 
@@ -407,12 +405,17 @@ class GerberViewer {
             };
         });
 
-        // Surface finish selection
+        // Surface finish selection (toggle on/off)
         document.querySelectorAll('.view-btn[data-finish]').forEach(btn => {
             btn.onclick = () => {
+                const wasActive = btn.classList.contains('active');
                 document.querySelectorAll('.view-btn[data-finish]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.surfaceFinish = btn.dataset.finish;
+                if (wasActive) {
+                    this.surfaceFinish = 'none';
+                } else {
+                    btn.classList.add('active');
+                    this.surfaceFinish = btn.dataset.finish;
+                }
                 this.render();
             };
         });
@@ -1558,8 +1561,17 @@ class GerberViewer {
         };
 
         if (this.copperOnly) {
+            // Copper only mode
             for (const l of sorted) {
                 if (isLayerVisible(l) && (l.type === 'copper' || l.type === 'inner')) this.renderLayer(l, ctx);
+            }
+            // Surface finish on exposed pads (visible in copper-only mode)
+            if (this.surfaceFinish !== 'none') {
+                for (const l of sorted) {
+                    if (isLayerVisible(l) && l.type === 'mask') {
+                        this.renderSurfaceFinish(l, ctx);
+                    }
+                }
             }
         } else {
             // 1. Inner layers (if visible)
@@ -1572,7 +1584,16 @@ class GerberViewer {
                 if (isLayerVisible(l) && l.type === 'copper') this.renderLayer(l, ctx);
             }
 
-            // 3. Solder mask
+            // 3. Surface finish layer (on exposed pads before mask)
+            if (this.surfaceFinish !== 'none') {
+                for (const l of sorted) {
+                    if (isLayerVisible(l) && l.type === 'mask') {
+                        this.renderSurfaceFinish(l, ctx);
+                    }
+                }
+            }
+
+            // 4. Solder mask
             for (const l of sorted) {
                 if (isLayerVisible(l) && l.type === 'mask') {
                     ctx.globalAlpha = 0.78;
@@ -1581,7 +1602,7 @@ class GerberViewer {
                 }
             }
 
-            // 4. Silkscreen
+            // 5. Silkscreen
             for (const l of sorted) {
                 if (isLayerVisible(l) && l.type === 'silk') this.renderLayer(l, ctx);
             }
@@ -1666,6 +1687,40 @@ class GerberViewer {
         };
     }
 
+    renderSurfaceFinish(layer, ctx) {
+        // Render surface finish (gold/silver) on exposed pads
+        // Uses mask layer openings to determine where finish goes
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = this.finishColors[this.surfaceFinish];
+        ctx.strokeStyle = this.finishColors[this.surfaceFinish];
+
+        for (const cmd of layer.cmds) {
+            if (cmd.polarity === 'clear') continue;
+
+            if (cmd.type === 'region' && cmd.points.length >= 3) {
+                ctx.beginPath();
+                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+            } else if (cmd.type === 'line') {
+                ctx.lineWidth = cmd.width || 0.1;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cmd.x1, cmd.y1);
+                ctx.lineTo(cmd.x2, cmd.y2);
+                ctx.stroke();
+            } else if (cmd.type === 'flash') {
+                this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
+            }
+        }
+
+        ctx.restore();
+    }
+
     renderSolderMask(layer, ctx) {
         ctx.save();
 
@@ -1710,39 +1765,6 @@ class GerberViewer {
         }
 
         ctx.restore();
-
-        // Draw surface finish on exposed pads (gold/silver coating)
-        if (this.surfaceFinish !== 'hasl') {
-            ctx.save();
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.fillStyle = this.finishColors[this.surfaceFinish];
-            ctx.strokeStyle = this.finishColors[this.surfaceFinish];
-
-            for (const cmd of layer.cmds) {
-                if (cmd.polarity === 'clear') continue;
-
-                if (cmd.type === 'region' && cmd.points.length >= 3) {
-                    ctx.beginPath();
-                    ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
-                    for (let i = 1; i < cmd.points.length; i++) {
-                        ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
-                    }
-                    ctx.closePath();
-                    ctx.fill();
-                } else if (cmd.type === 'line') {
-                    ctx.lineWidth = cmd.width || 0.1;
-                    ctx.lineCap = 'round';
-                    ctx.beginPath();
-                    ctx.moveTo(cmd.x1, cmd.y1);
-                    ctx.lineTo(cmd.x2, cmd.y2);
-                    ctx.stroke();
-                } else if (cmd.type === 'flash') {
-                    this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
-                }
-            }
-
-            ctx.restore();
-        }
     }
 
     renderLayer(layer, ctx) {
