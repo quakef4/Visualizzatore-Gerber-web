@@ -255,6 +255,7 @@
             <button class="tool-btn" id="btnFlipV" title="Specchia V">&#8597;</button>
             <div class="tool-sep"></div>
             <button class="tool-btn" id="btnMeasure" title="Misura distanza">&#128207;</button>
+            <button class="tool-btn" id="btnSnap" title="Snap a fori/pad">&#127919;</button>
         </div>
         <div class="canvas-container" id="canvasContainer">
             <canvas id="canvas2d" style="display:none"></canvas>
@@ -322,6 +323,8 @@ class GerberViewer {
         this.measuring = false;
         this.measureStart = null;
         this.measureEnd = null;
+        this.snapMode = false;
+        this.snapDistance = 1.5; // Snap distance in mm
 
         // 3D
         this.scene = null;
@@ -374,6 +377,11 @@ class GerberViewer {
                 document.getElementById('measureInfo').classList.remove('show');
                 this.render();
             }
+        };
+
+        document.getElementById('btnSnap').onclick = () => {
+            this.snapMode = !this.snapMode;
+            document.getElementById('btnSnap').classList.toggle('active', this.snapMode);
         };
 
         document.getElementById('btnDRC').onclick = () => {
@@ -447,7 +455,12 @@ class GerberViewer {
         container.onmousedown = e => {
             if (this.mode !== '2d') return;
             if (this.measuring) {
-                const coords = this.screenToWorld(e.clientX, e.clientY);
+                let coords = this.screenToWorld(e.clientX, e.clientY);
+                // Apply snap if enabled
+                if (this.snapMode) {
+                    const snapped = this.findSnapPoint(coords);
+                    if (snapped) coords = snapped;
+                }
                 if (!this.measureStart) {
                     this.measureStart = coords;
                 } else {
@@ -465,7 +478,13 @@ class GerberViewer {
         container.onmousemove = e => {
             if (this.mode !== '2d') return;
             if (this.measuring && this.measureStart && !this.measureEnd) {
-                this.measureEnd = this.screenToWorld(e.clientX, e.clientY);
+                let coords = this.screenToWorld(e.clientX, e.clientY);
+                // Apply snap if enabled
+                if (this.snapMode) {
+                    const snapped = this.findSnapPoint(coords);
+                    if (snapped) coords = snapped;
+                }
+                this.measureEnd = coords;
                 this.showMeasurement();
                 this.render();
                 this.measureEnd = null;
@@ -515,6 +534,100 @@ class GerberViewer {
         const dist = Math.sqrt(dx * dx + dy * dy);
         document.getElementById('measureValue').textContent = dist.toFixed(3) + ' mm';
         document.getElementById('measureInfo').classList.add('show');
+    }
+
+    findSnapPoint(coords) {
+        if (!this.bounds) return null;
+
+        let bestDist = this.snapDistance;
+        let bestPoint = null;
+
+        // Search for drill holes
+        for (const layer of this.layers) {
+            if (layer.type === 'drill' && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'drill') {
+                        const d = Math.hypot(cmd.x - coords.x, cmd.y - coords.y);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestPoint = { x: cmd.x, y: cmd.y };
+                        }
+                    } else if (cmd.type === 'slot') {
+                        // Snap to slot endpoints
+                        const d1 = Math.hypot(cmd.x1 - coords.x, cmd.y1 - coords.y);
+                        const d2 = Math.hypot(cmd.x2 - coords.x, cmd.y2 - coords.y);
+                        if (d1 < bestDist) {
+                            bestDist = d1;
+                            bestPoint = { x: cmd.x1, y: cmd.y1 };
+                        }
+                        if (d2 < bestDist) {
+                            bestDist = d2;
+                            bestPoint = { x: cmd.x2, y: cmd.y2 };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search for pad centers (flashes) on copper layers
+        for (const layer of this.layers) {
+            if ((layer.type === 'copper' || layer.type === 'inner') && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'flash') {
+                        const d = Math.hypot(cmd.x - coords.x, cmd.y - coords.y);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestPoint = { x: cmd.x, y: cmd.y };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search for line endpoints on copper layers
+        for (const layer of this.layers) {
+            if ((layer.type === 'copper' || layer.type === 'inner') && layer.visible) {
+                for (const cmd of layer.cmds) {
+                    if (cmd.type === 'line') {
+                        const d1 = Math.hypot(cmd.x1 - coords.x, cmd.y1 - coords.y);
+                        const d2 = Math.hypot(cmd.x2 - coords.x, cmd.y2 - coords.y);
+                        if (d1 < bestDist) {
+                            bestDist = d1;
+                            bestPoint = { x: cmd.x1, y: cmd.y1 };
+                        }
+                        if (d2 < bestDist) {
+                            bestDist = d2;
+                            bestPoint = { x: cmd.x2, y: cmd.y2 };
+                        }
+                    } else if (cmd.type === 'arc') {
+                        // Snap to arc endpoints
+                        const d1 = Math.hypot(cmd.x1 - coords.x, cmd.y1 - coords.y);
+                        const d2 = Math.hypot(cmd.x2 - coords.x, cmd.y2 - coords.y);
+                        if (d1 < bestDist) {
+                            bestDist = d1;
+                            bestPoint = { x: cmd.x1, y: cmd.y1 };
+                        }
+                        if (d2 < bestDist) {
+                            bestDist = d2;
+                            bestPoint = { x: cmd.x2, y: cmd.y2 };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search for board outline vertices
+        if (this.boardOutline?.length >= 3) {
+            for (const p of this.boardOutline) {
+                const d = Math.hypot(p.x - coords.x, p.y - coords.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestPoint = { x: p.x, y: p.y };
+                }
+            }
+        }
+
+        return bestPoint;
     }
 
     setMode(mode) {
@@ -1746,18 +1859,26 @@ class GerberViewer {
         this.controls.rotateSpeed = 0.8;
         this.controls.zoomSpeed = 1.0;
         this.controls.panSpeed = 0.8;
+        // Allow full rotation (no constraints)
+        this.controls.minPolarAngle = 0;
+        this.controls.maxPolarAngle = Math.PI;
 
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // Lights - ambient for base illumination
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambientLight);
 
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(50, 50, 100);
-        this.scene.add(directionalLight);
+        // Directional lights attached to camera for consistent illumination
+        // regardless of rotation angle
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        directionalLight.position.set(0, 0, 1); // Light from camera direction
+        this.camera.add(directionalLight);
 
-        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-        directionalLight2.position.set(-50, -50, 50);
-        this.scene.add(directionalLight2);
+        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
+        directionalLight2.position.set(0, 1, 0.5); // Light from above-camera
+        this.camera.add(directionalLight2);
+
+        // Add camera to scene so camera-attached lights work
+        this.scene.add(this.camera);
     }
 
     resize3D() {
@@ -1771,6 +1892,11 @@ class GerberViewer {
 
     update3D() {
         if (!this.bounds || !this.scene) return;
+
+        // Save camera position and controls target before rebuilding
+        const savedCameraPosition = this.camera ? this.camera.position.clone() : null;
+        const savedControlsTarget = this.controls ? this.controls.target.clone() : null;
+        const isFirstRender = !this.pcbMesh;
 
         // Remove old PCB mesh
         if (this.pcbMesh) {
@@ -1924,10 +2050,17 @@ class GerberViewer {
 
         this.scene.add(this.pcbMesh);
 
-        // Center camera
-        const maxDim = Math.max(bw, bh);
-        this.camera.position.set(0, -maxDim * 1.2, maxDim * 0.8);
-        this.controls.target.set(0, 0, 0);
+        // Restore camera position or set initial position
+        if (!isFirstRender && savedCameraPosition && savedControlsTarget) {
+            // Restore saved camera position
+            this.camera.position.copy(savedCameraPosition);
+            this.controls.target.copy(savedControlsTarget);
+        } else {
+            // Center camera for first render
+            const maxDim = Math.max(bw, bh);
+            this.camera.position.set(0, -maxDim * 1.2, maxDim * 0.8);
+            this.controls.target.set(0, 0, 0);
+        }
         this.controls.update();
     }
 
@@ -2117,13 +2250,145 @@ class GerberViewer {
             side: THREE.DoubleSide
         });
 
-        const geometry = new THREE.ExtrudeGeometry(boardShape, { depth: thickness, bevelEnabled: false });
+        // Clone the board shape and add holes for pad openings
+        const maskShape = new THREE.Shape();
+
+        // Copy the board outline
+        if (this.boardOutline?.length >= 3) {
+            maskShape.moveTo(this.boardOutline[0].x - cx, this.boardOutline[0].y - cy);
+            for (let i = 1; i < this.boardOutline.length; i++) {
+                maskShape.lineTo(this.boardOutline[i].x - cx, this.boardOutline[i].y - cy);
+            }
+            maskShape.closePath();
+        } else {
+            const bw = this.bounds.maxX - this.bounds.minX;
+            const bh = this.bounds.maxY - this.bounds.minY;
+            maskShape.moveTo(-bw/2, -bh/2);
+            maskShape.lineTo(bw/2, -bh/2);
+            maskShape.lineTo(bw/2, bh/2);
+            maskShape.lineTo(-bw/2, bh/2);
+            maskShape.closePath();
+        }
+
+        // Add holes for each pad opening in the solder mask
+        for (const cmd of layer.cmds) {
+            if (cmd.polarity === 'clear') continue;
+
+            if (cmd.type === 'flash') {
+                const hole = this.createApertureHole(cmd.aperture, cmd.x - cx, cmd.y - cy);
+                if (hole) maskShape.holes.push(hole);
+            } else if (cmd.type === 'region' && cmd.points.length >= 3) {
+                const hole = new THREE.Path();
+                hole.moveTo(cmd.points[0].x - cx, cmd.points[0].y - cy);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    hole.lineTo(cmd.points[i].x - cx, cmd.points[i].y - cy);
+                }
+                hole.closePath();
+                maskShape.holes.push(hole);
+            }
+        }
+
+        const geometry = new THREE.ExtrudeGeometry(maskShape, { depth: thickness, bevelEnabled: false });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.z = zPos;
         this.pcbMesh.add(mesh);
     }
 
-    // SVG Export
+    createApertureHole(ap, x, y) {
+        const hole = new THREE.Path();
+        const segments = 24;
+
+        if (ap.type === 'C') {
+            const r = (ap.params[0] || 0.5) / 2;
+            for (let i = 0; i <= segments; i++) {
+                const angle = (i / segments) * Math.PI * 2;
+                const px = x + r * Math.cos(angle);
+                const py = y + r * Math.sin(angle);
+                if (i === 0) hole.moveTo(px, py);
+                else hole.lineTo(px, py);
+            }
+            hole.closePath();
+            return hole;
+        } else if (ap.type === 'R') {
+            const w = ap.params[0] || 0.5;
+            const h = ap.params.length > 1 ? ap.params[1] : w;
+            const rot = (ap.rotation || 0) * Math.PI / 180;
+            const corners = [
+                { x: -w/2, y: -h/2 },
+                { x: w/2, y: -h/2 },
+                { x: w/2, y: h/2 },
+                { x: -w/2, y: h/2 }
+            ];
+            for (let i = 0; i < corners.length; i++) {
+                let cx = corners[i].x, cy = corners[i].y;
+                if (rot) {
+                    const nx = cx * Math.cos(rot) - cy * Math.sin(rot);
+                    const ny = cx * Math.sin(rot) + cy * Math.cos(rot);
+                    cx = nx; cy = ny;
+                }
+                if (i === 0) hole.moveTo(x + cx, y + cy);
+                else hole.lineTo(x + cx, y + cy);
+            }
+            hole.closePath();
+            return hole;
+        } else if (ap.type === 'O') {
+            const w = ap.params[0] || 0.5;
+            const h = ap.params.length > 1 ? ap.params[1] : w;
+            const r = Math.min(w, h) / 2;
+
+            if (w > h) {
+                const dx = (w - h) / 2;
+                hole.moveTo(x - dx, y - r);
+                hole.lineTo(x + dx, y - r);
+                hole.absarc(x + dx, y, r, -Math.PI/2, Math.PI/2, false);
+                hole.lineTo(x - dx, y + r);
+                hole.absarc(x - dx, y, r, Math.PI/2, -Math.PI/2, false);
+            } else {
+                const dy = (h - w) / 2;
+                hole.moveTo(x + r, y - dy);
+                hole.lineTo(x + r, y + dy);
+                hole.absarc(x, y + dy, r, 0, Math.PI, false);
+                hole.lineTo(x - r, y - dy);
+                hole.absarc(x, y - dy, r, Math.PI, 0, false);
+            }
+            hole.closePath();
+            return hole;
+        } else if (ap.type === 'P') {
+            const od = ap.params[0] || 0.5;
+            const vertices = ap.params[1] || 4;
+            const pRot = (ap.params[2] || 0) * Math.PI / 180;
+            for (let i = 0; i < vertices; i++) {
+                const angle = pRot + (i * 2 * Math.PI / vertices);
+                const px = x + (od / 2) * Math.cos(angle);
+                const py = y + (od / 2) * Math.sin(angle);
+                if (i === 0) hole.moveTo(px, py);
+                else hole.lineTo(px, py);
+            }
+            hole.closePath();
+            return hole;
+        } else if (ap.type === 'POLY' && ap.vertices) {
+            hole.moveTo(x + ap.vertices[0].x, y + ap.vertices[0].y);
+            for (let i = 1; i < ap.vertices.length; i++) {
+                hole.lineTo(x + ap.vertices[i].x, y + ap.vertices[i].y);
+            }
+            hole.closePath();
+            return hole;
+        }
+
+        // Fallback: small circle
+        const r = 0.25;
+        for (let i = 0; i <= segments; i++) {
+            const angle = (i / segments) * Math.PI * 2;
+            const px = x + r * Math.cos(angle);
+            const py = y + r * Math.sin(angle);
+            if (i === 0) hole.moveTo(px, py);
+            else hole.lineTo(px, py);
+        }
+        hole.closePath();
+        return hole;
+    }
+
+    // SVG Export - All layers separated
     exportSvg() {
         if (!this.bounds || !this.layers.length) return;
 
@@ -2137,38 +2402,49 @@ class GerberViewer {
 
         const lines = [];
         lines.push('<?xml version="1.0" encoding="UTF-8"?>');
+        lines.push(`<!-- Gerber Viewer Pro - PCB Export -->`);
+        lines.push(`<!-- Layers: ${this.layers.map(l => l.name).join(', ')} -->`);
         lines.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">`);
         lines.push('<defs>');
         lines.push('  <style>');
         lines.push(`    .copper { fill: ${this.colors.copper}; stroke: none; }`);
         lines.push(`    .mask { fill: ${this.colors.mask}; stroke: none; opacity: 0.78; }`);
         lines.push(`    .silk { fill: ${this.colors.silk}; stroke: none; }`);
-        lines.push('    .outline { fill: none; stroke: #facc15; stroke-width: 0.15; }');
-        lines.push(`    .drill { fill: ${this.colors.bg}; stroke: ${this.colors.copper}; stroke-width: 0.15; }`);
+        lines.push('    .outline { fill: none; stroke: #facc15; stroke-width: 1.5; }');
+        lines.push(`    .drill { fill: ${this.colors.bg}; stroke: ${this.colors.copper}; stroke-width: 1.5; }`);
         lines.push(`    .fr4 { fill: ${this.colors.fr4}; stroke: none; }`);
         lines.push('    .inner { fill: #cd7f32; stroke: none; }');
         lines.push('  </style>');
         lines.push('</defs>');
-        lines.push(`<rect width="100%" height="100%" fill="${this.colors.bg}"/>`);
-        lines.push(`<g transform="translate(${padding * scale}, ${(bh + padding) * scale}) scale(${scale}, ${-scale})">`);
 
-        // FR4 background
+        // Background
+        lines.push(`<rect id="background" width="100%" height="100%" fill="${this.colors.bg}"/>`);
+
+        // Main coordinate transform group
+        lines.push(`<g id="pcb-content" transform="translate(${padding * scale}, ${(bh + padding) * scale}) scale(${scale}, ${-scale})">`);
+
+        // FR4 background layer
+        lines.push('  <g id="layer-FR4-substrate" class="fr4">');
         if (this.boardOutline?.length >= 3) {
             const pathData = this.boardOutline.map((p, i) =>
                 `${i === 0 ? 'M' : 'L'}${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`
             ).join(' ') + ' Z';
-            lines.push(`  <path class="fr4" d="${pathData}"/>`);
+            lines.push(`    <path d="${pathData}"/>`);
         }
+        lines.push('  </g>');
 
+        // Sort layers by type order for proper stacking
         const sorted = [...this.layers].sort((a, b) => a.order - b.order);
 
+        // Export ALL layers (visible or hidden)
         for (const layer of sorted) {
-            if (!layer.visible) continue;
-            if (layer.type === 'outline') continue; // Outline rendered separately
-
             const layerClass = layer.type === 'inner' ? 'inner' : layer.type;
-            const layerId = layer.name.replace(/[^a-zA-Z0-9]/g, '_');
-            lines.push(`  <g class="${layerClass}" id="layer-${layerId}" fill="${layer.color}">`);
+            const layerId = layer.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const visibility = layer.visible ? 'visible' : 'hidden';
+            const layerSide = layer.side ? ` data-side="${layer.side}"` : '';
+
+            lines.push(`  <g id="layer-${layerId}" class="${layerClass}" data-type="${layer.type}"${layerSide} visibility="${visibility}" fill="${layer.color}">`);
+            lines.push(`    <!-- Layer: ${layer.name} (${layer.type}, ${layer.side || 'both'}) -->`);
 
             for (const cmd of layer.cmds) {
                 if (cmd.polarity === 'clear') continue;
@@ -2186,7 +2462,6 @@ class GerberViewer {
                     const w = (cmd.width || 0.1).toFixed(3);
                     lines.push(`    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${layer.color}" stroke-width="${w}" stroke-linecap="round" fill="none"/>`);
                 } else if (cmd.type === 'arc') {
-                    // Convert arc to polyline
                     const pts = this.arcToPoints(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.i, cmd.j, cmd.cw);
                     const pathParts = [`M${(cmd.x1 - this.bounds.minX).toFixed(3)},${(cmd.y1 - this.bounds.minY).toFixed(3)}`];
                     for (const p of pts) {
@@ -2200,29 +2475,30 @@ class GerberViewer {
                     const x = (cmd.x - this.bounds.minX).toFixed(3);
                     const y = (cmd.y - this.bounds.minY).toFixed(3);
                     const r = (cmd.diameter / 2).toFixed(3);
-                    lines.push(`    <circle class="drill" cx="${x}" cy="${y}" r="${r}"/>`);
+                    lines.push(`    <circle cx="${x}" cy="${y}" r="${r}" fill="${this.colors.bg}" stroke="${this.colors.copper}" stroke-width="0.015"/>`);
                 } else if (cmd.type === 'slot') {
                     const x1 = (cmd.x1 - this.bounds.minX).toFixed(3);
                     const y1 = (cmd.y1 - this.bounds.minY).toFixed(3);
                     const x2 = (cmd.x2 - this.bounds.minX).toFixed(3);
                     const y2 = (cmd.y2 - this.bounds.minY).toFixed(3);
                     const w = cmd.diameter.toFixed(3);
-                    lines.push(`    <line class="drill" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${this.colors.bg}" stroke-width="${w}" stroke-linecap="round"/>`);
+                    lines.push(`    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${this.colors.bg}" stroke-width="${w}" stroke-linecap="round"/>`);
                 }
             }
 
             lines.push('  </g>');
         }
 
-        // Board outline
+        // Board outline as separate layer
         if (this.boardOutline?.length >= 3) {
             const olLayer = this.layers.find(l => l.type === 'outline');
-            if (olLayer?.visible) {
-                const pathData = this.boardOutline.map((p, i) =>
-                    `${i === 0 ? 'M' : 'L'}${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`
-                ).join(' ') + ' Z';
-                lines.push(`  <path class="outline" d="${pathData}"/>`);
-            }
+            const visibility = olLayer?.visible ? 'visible' : 'hidden';
+            const pathData = this.boardOutline.map((p, i) =>
+                `${i === 0 ? 'M' : 'L'}${(p.x - this.bounds.minX).toFixed(3)},${(p.y - this.bounds.minY).toFixed(3)}`
+            ).join(' ') + ' Z';
+            lines.push(`  <g id="layer-board-outline" class="outline" data-type="outline" visibility="${visibility}">`);
+            lines.push(`    <path d="${pathData}" fill="none" stroke="#facc15" stroke-width="0.15"/>`);
+            lines.push('  </g>');
         }
 
         lines.push('</g>');
