@@ -88,11 +88,8 @@
         .tool-btn.active { background:var(--accent); color:#000; border-color:var(--accent); }
         .tool-sep { width:1px; height:24px; background:var(--border); margin:0 4px; }
         .zoom-display { font-size:12px; color:var(--text); min-width:55px; text-align:center; }
-        .canvas-container { flex:1; position:relative; overflow:hidden; display:flex; flex-direction:row; }
-        #canvas2d { flex:1; cursor:grab; }
-        #canvas2dBottom { flex:1; cursor:grab; display:none; border-left:2px solid var(--border); }
-        .canvas-container.dual-view #canvas2d { flex:1; }
-        .canvas-container.dual-view #canvas2dBottom { display:block; flex:1; }
+        .canvas-container { flex:1; position:relative; overflow:hidden; }
+        #canvas2d { position:absolute; top:0; left:0; width:100%; height:100%; cursor:grab; }
         .empty-state { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text2); }
         .empty-icon { font-size:72px; margin-bottom:20px; opacity:.2; }
         .empty-title { font-size:20px; margin-bottom:8px; color:var(--text); }
@@ -190,7 +187,14 @@
                         <button class="view-btn active" data-view="top">Top</button>
                         <button class="view-btn" data-view="bottom">Bottom</button>
                         <button class="view-btn" data-view="all">Tutti</button>
-                        <button class="view-btn" data-view="both">Entrambi</button>
+                    </div>
+                </div>
+                <div class="view-section" style="margin-top:12px">
+                    <div class="view-label">Finitura Superficiale</div>
+                    <div class="view-grid">
+                        <button class="view-btn active" data-finish="hasl">HASL</button>
+                        <button class="view-btn" data-finish="gold">Oro</button>
+                        <button class="view-btn" data-finish="silver">Argento</button>
                     </div>
                 </div>
                 <div class="copper-toggle">
@@ -250,7 +254,6 @@
         </div>
         <div class="canvas-container" id="canvasContainer">
             <canvas id="canvas2d"></canvas>
-            <canvas id="canvas2dBottom" style="display:none"></canvas>
             <div class="empty-state" id="emptyState">
                 <div class="empty-icon">&#9643;</div>
                 <div class="empty-title">Carica file Gerber</div>
@@ -310,11 +313,14 @@ class GerberViewer {
         this.colors = { bg:'#0c0c0c', mask:'#14532d', silk:'#f5f5f4', copper:'#b45309', fr4:'#c19a6b' };
         this.copperOnly = false;
         this.currentView = 'top';
-        this.dualView = false;
 
-        // Second canvas for dual view
-        this.canvas2dBottom = document.getElementById('canvas2dBottom');
-        this.ctxBottom = this.canvas2dBottom.getContext('2d');
+        // Surface finish colors
+        this.surfaceFinish = 'hasl'; // hasl, gold, silver
+        this.finishColors = {
+            hasl: '#b45309',   // Same as copper (tin-lead)
+            gold: '#ffd700',   // Gold ENIG
+            silver: '#c0c0c0' // Silver immersion
+        };
 
         // Measure tool
         this.measuring = false;
@@ -398,6 +404,16 @@ class GerberViewer {
                 document.querySelectorAll('.view-btn[data-view]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.setView(btn.dataset.view);
+            };
+        });
+
+        // Surface finish selection
+        document.querySelectorAll('.view-btn[data-finish]').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.view-btn[data-finish]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.surfaceFinish = btn.dataset.finish;
+                this.render();
             };
         });
 
@@ -659,24 +675,11 @@ class GerberViewer {
 
     setView(view) {
         this.currentView = view;
-        const container = document.getElementById('canvasContainer');
-
-        if (view === 'both') {
-            // Dual view mode - show both canvases
-            this.dualView = true;
-            container.classList.add('dual-view');
-            // For dual view, show all layers on both canvases
-            this.layers.forEach(l => l.visible = true);
-        } else {
-            // Single view mode
-            this.dualView = false;
-            container.classList.remove('dual-view');
-            this.layers.forEach(l => {
-                if (view === 'all') l.visible = true;
-                else if (view === 'top') l.visible = l.side === 'top' || l.side === 'both';
-                else if (view === 'bottom') l.visible = l.side === 'bottom' || l.side === 'both';
-            });
-        }
+        this.layers.forEach(l => {
+            if (view === 'all') l.visible = true;
+            else if (view === 'top') l.visible = l.side === 'top' || l.side === 'both';
+            else if (view === 'bottom') l.visible = l.side === 'bottom' || l.side === 'both';
+        });
         this.updateLayerList();
         this.fit();
     }
@@ -1460,34 +1463,16 @@ class GerberViewer {
     fit() {
         if (!this.bounds) return;
         const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+        this.canvas2d.width = rect.width;
+        this.canvas2d.height = rect.height;
 
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
-
-        if (this.dualView) {
-            // Dual view - split horizontally, each canvas gets half width
-            const canvasWidth = Math.floor((rect.width - 2) / 2); // 2px for border
-            this.canvas2d.width = canvasWidth;
-            this.canvas2d.height = rect.height;
-            this.canvas2dBottom.width = canvasWidth;
-            this.canvas2dBottom.height = rect.height;
-
-            const sw = (canvasWidth - 40) / bw;
-            const sh = (rect.height - 40) / bh;
-            this.ppm = Math.min(sw, sh);
-            this.zoom = 1;
-            this.pan = { x: (canvasWidth - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
-        } else {
-            // Single view - full width
-            this.canvas2d.width = rect.width;
-            this.canvas2d.height = rect.height;
-
-            const sw = (rect.width - 80) / bw;
-            const sh = (rect.height - 80) / bh;
-            this.ppm = Math.min(sw, sh);
-            this.zoom = 1;
-            this.pan = { x: (rect.width - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
-        }
+        const sw = (rect.width - 80) / bw;
+        const sh = (rect.height - 80) / bh;
+        this.ppm = Math.min(sw, sh);
+        this.zoom = 1;
+        this.pan = { x: (rect.width - bw * this.ppm) / 2, y: (rect.height - bh * this.ppm) / 2 };
         this.updateZoomDisplay();
         this.render();
     }
@@ -1516,17 +1501,9 @@ class GerberViewer {
     render() {
         if (!this.bounds || !this.layers.length) return;
 
-        if (this.dualView) {
-            // Dual view: render TOP to left canvas, BOTTOM to right canvas
-            this.renderToCanvas(this.ctx, this.canvas2d, 'top');
-            this.renderToCanvas(this.ctxBottom, this.canvas2dBottom, 'bottom');
-        } else {
-            // Single view: render current view
-            this.renderToCanvas(this.ctx, this.canvas2d, this.currentView);
-        }
-    }
-
-    renderToCanvas(ctx, canvas, viewSide) {
+        const ctx = this.ctx;
+        const canvas = this.canvas2d;
+        const viewSide = this.currentView;
         const scale = this.ppm * this.zoom;
         const bw = this.bounds.maxX - this.bounds.minX;
         const bh = this.bounds.maxY - this.bounds.minY;
@@ -1633,18 +1610,8 @@ class GerberViewer {
 
         ctx.restore();
 
-        // Draw view label in dual view mode
-        if (this.dualView) {
-            ctx.save();
-            ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, sans-serif';
-            ctx.fillStyle = '#22c55e';
-            ctx.textAlign = 'center';
-            ctx.fillText(viewSide.toUpperCase(), canvas.width / 2, 20);
-            ctx.restore();
-        }
-
-        // Draw measurement line (only on main canvas)
-        if (canvas === this.canvas2d && this.measuring && this.measureStart) {
+        // Draw measurement line
+        if (this.measuring && this.measureStart) {
             const end = this.measureEnd || this.tempMeasureEnd || this.measureStart;
             ctx.save();
             ctx.strokeStyle = '#22c55e';
@@ -1743,6 +1710,39 @@ class GerberViewer {
         }
 
         ctx.restore();
+
+        // Draw surface finish on exposed pads (gold/silver coating)
+        if (this.surfaceFinish !== 'hasl') {
+            ctx.save();
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.fillStyle = this.finishColors[this.surfaceFinish];
+            ctx.strokeStyle = this.finishColors[this.surfaceFinish];
+
+            for (const cmd of layer.cmds) {
+                if (cmd.polarity === 'clear') continue;
+
+                if (cmd.type === 'region' && cmd.points.length >= 3) {
+                    ctx.beginPath();
+                    ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                    for (let i = 1; i < cmd.points.length; i++) {
+                        ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                } else if (cmd.type === 'line') {
+                    ctx.lineWidth = cmd.width || 0.1;
+                    ctx.lineCap = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(cmd.x1, cmd.y1);
+                    ctx.lineTo(cmd.x2, cmd.y2);
+                    ctx.stroke();
+                } else if (cmd.type === 'flash') {
+                    this.drawFlash(ctx, cmd.x, cmd.y, cmd.aperture);
+                }
+            }
+
+            ctx.restore();
+        }
     }
 
     renderLayer(layer, ctx) {
@@ -1784,27 +1784,31 @@ class GerberViewer {
     renderDrillLayer(layer, ctx) {
         for (const cmd of layer.cmds) {
             if (cmd.type === 'drill') {
+                // Draw the hole (background color)
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.fillStyle = this.colors.bg;
                 ctx.beginPath();
                 ctx.arc(cmd.x, cmd.y, cmd.diameter / 2, 0, Math.PI * 2);
                 ctx.fill();
 
+                // Draw thin edge outline around hole (not a pad ring)
                 ctx.strokeStyle = this.colors.copper;
-                ctx.lineWidth = 0.15;
+                ctx.lineWidth = 0.05;
                 ctx.beginPath();
-                ctx.arc(cmd.x, cmd.y, cmd.diameter / 2 + 0.15, 0, Math.PI * 2);
+                ctx.arc(cmd.x, cmd.y, cmd.diameter / 2, 0, Math.PI * 2);
                 ctx.stroke();
             } else if (cmd.type === 'slot') {
+                // Draw slot outline
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.strokeStyle = this.colors.copper;
                 ctx.lineCap = 'round';
-                ctx.lineWidth = cmd.diameter + 0.3;
+                ctx.lineWidth = cmd.diameter + 0.1;
                 ctx.beginPath();
                 ctx.moveTo(cmd.x1, cmd.y1);
                 ctx.lineTo(cmd.x2, cmd.y2);
                 ctx.stroke();
 
+                // Draw slot hole
                 ctx.strokeStyle = this.colors.bg;
                 ctx.lineWidth = cmd.diameter;
                 ctx.beginPath();
@@ -2109,8 +2113,6 @@ class GerberViewer {
         this.pads = [];
         this.nets = [];
         this.x2Attributes = {};
-        this.dualView = false;
-        document.getElementById('canvasContainer').classList.remove('dual-view');
         this.updateUI();
         this.updateStats();
         document.getElementById('emptyState').style.display = 'flex';
