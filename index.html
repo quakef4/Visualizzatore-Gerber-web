@@ -507,13 +507,13 @@ class GerberViewer {
         const maskThickness = 0.05;    // Increased from 0.02
         const silkThickness = 0.03;    // Increased from 0.01
 
-        // Board outline shape
+        // Board outline shape (Y flipped to match 2D)
         let boardShape;
         if (this.boardOutline && this.boardOutline.length >= 3) {
             boardShape = new THREE.Shape();
-            boardShape.moveTo((this.boardOutline[0].x - centerX) * scale, (this.boardOutline[0].y - centerY) * scale);
+            boardShape.moveTo((this.boardOutline[0].x - centerX) * scale, -(this.boardOutline[0].y - centerY) * scale);
             for (let i = 1; i < this.boardOutline.length; i++) {
-                boardShape.lineTo((this.boardOutline[i].x - centerX) * scale, (this.boardOutline[i].y - centerY) * scale);
+                boardShape.lineTo((this.boardOutline[i].x - centerX) * scale, -(this.boardOutline[i].y - centerY) * scale);
             }
             boardShape.closePath();
         } else {
@@ -701,13 +701,13 @@ class GerberViewer {
 
     addFlash3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
         const x = (cmd.x - centerX) * scale;
-        const y = (cmd.y - centerY) * scale;
+        const y = -(cmd.y - centerY) * scale;  // Flip Y to match 2D
         const ap = cmd.aperture;
         let geometry;
 
         if (ap.type === 'C') {
             const radius = (ap.params[0] || 0.5) / 2 * scale;
-            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 32);
             geometry.rotateX(Math.PI / 2);
         } else if (ap.type === 'R') {
             const w = (ap.params[0] || 0.5) * scale;
@@ -718,7 +718,7 @@ class GerberViewer {
             const w = (ap.params[0] || 0.5) * scale;
             const h = (ap.params[1] || ap.params[0] || 0.5) * scale;
             if (Math.abs(w - h) < 0.001) {
-                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 24);
+                geometry = new THREE.CylinderGeometry(w/2, w/2, thickness, 32);
                 geometry.rotateX(Math.PI / 2);
             } else {
                 // Create obround shape (stadium shape)
@@ -751,11 +751,11 @@ class GerberViewer {
             geometry = new THREE.CylinderGeometry(od/2, od/2, thickness, vertices);
             geometry.rotateX(Math.PI / 2);
         } else if (ap.type === 'POLY' && ap.vertices) {
-            // Custom polygon from macro
+            // Custom polygon from macro - flip Y
             const shape = new THREE.Shape();
-            shape.moveTo(ap.vertices[0].x * scale, ap.vertices[0].y * scale);
+            shape.moveTo(ap.vertices[0].x * scale, -ap.vertices[0].y * scale);
             for (let i = 1; i < ap.vertices.length; i++) {
-                shape.lineTo(ap.vertices[i].x * scale, ap.vertices[i].y * scale);
+                shape.lineTo(ap.vertices[i].x * scale, -ap.vertices[i].y * scale);
             }
             shape.closePath();
             geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
@@ -763,13 +763,13 @@ class GerberViewer {
         } else {
             // Fallback to circle
             const radius = (ap.params[0] || 0.5) / 2 * scale;
-            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 24);
+            geometry = new THREE.CylinderGeometry(radius, radius, thickness, 32);
             geometry.rotateX(Math.PI / 2);
         }
 
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.set(x, y, zPos);
-        if (ap.rotation) mesh.rotation.z = ap.rotation * Math.PI / 180;
+        if (ap.rotation) mesh.rotation.z = -ap.rotation * Math.PI / 180;  // Negate rotation for Y flip
         mesh.matrixAutoUpdate = false;
         mesh.updateMatrix();
         this.pcbGroup.add(mesh);
@@ -777,9 +777,9 @@ class GerberViewer {
 
     addLine3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
         const x1 = (cmd.x1 - centerX) * scale;
-        const y1 = (cmd.y1 - centerY) * scale;
+        const y1 = -(cmd.y1 - centerY) * scale;  // Flip Y
         const x2 = (cmd.x2 - centerX) * scale;
-        const y2 = (cmd.y2 - centerY) * scale;
+        const y2 = -(cmd.y2 - centerY) * scale;  // Flip Y
         const width = (cmd.width || 0.1) * scale;
         const radius = width / 2;
 
@@ -828,9 +828,9 @@ class GerberViewer {
 
         for (let i = 0; i < sampledPts.length - 1; i++) {
             const x1 = (sampledPts[i].x - centerX) * scale;
-            const y1 = (sampledPts[i].y - centerY) * scale;
+            const y1 = -(sampledPts[i].y - centerY) * scale;  // Flip Y
             const x2 = (sampledPts[i + 1].x - centerX) * scale;
-            const y2 = (sampledPts[i + 1].y - centerY) * scale;
+            const y2 = -(sampledPts[i + 1].y - centerY) * scale;  // Flip Y
 
             const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
             if (length < 0.001) continue;
@@ -860,9 +860,9 @@ class GerberViewer {
 
     addRegion3D(cmd, centerX, centerY, scale, zPos, thickness, material) {
         const shape = new THREE.Shape();
-        shape.moveTo((cmd.points[0].x - centerX) * scale, (cmd.points[0].y - centerY) * scale);
+        shape.moveTo((cmd.points[0].x - centerX) * scale, -(cmd.points[0].y - centerY) * scale);  // Flip Y
         for (let i = 1; i < cmd.points.length; i++) {
-            shape.lineTo((cmd.points[i].x - centerX) * scale, (cmd.points[i].y - centerY) * scale);
+            shape.lineTo((cmd.points[i].x - centerX) * scale, -(cmd.points[i].y - centerY) * scale);  // Flip Y
         }
         shape.closePath();
 
@@ -912,7 +912,7 @@ class GerberViewer {
         for (const cmd of layer.cmds) {
             if (cmd.type === 'drill') {
                 const x = (cmd.x - centerX) * scale;
-                const y = (cmd.y - centerY) * scale;
+                const y = -(cmd.y - centerY) * scale;  // Flip Y
                 const radius = (cmd.diameter / 2) * scale;
                 const annularRing = 0.2 * scale;  // Copper ring width
 
@@ -959,9 +959,9 @@ class GerberViewer {
 
             } else if (cmd.type === 'slot') {
                 const x1 = (cmd.x1 - centerX) * scale;
-                const y1 = (cmd.y1 - centerY) * scale;
+                const y1 = -(cmd.y1 - centerY) * scale;  // Flip Y
                 const x2 = (cmd.x2 - centerX) * scale;
-                const y2 = (cmd.y2 - centerY) * scale;
+                const y2 = -(cmd.y2 - centerY) * scale;  // Flip Y
                 const radius = (cmd.diameter / 2) * scale;
                 const length = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
                 const angle = Math.atan2(y2 - y1, x2 - x1);
