@@ -64,6 +64,13 @@
         .copper-btn { width:100%; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; }
         .copper-btn:hover { border-color:#f59e0b; color:#f59e0b; }
         .copper-btn.active { background:#b45309; color:#fff; border-color:#b45309; }
+        .finish-toggle { margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+        .finish-label { font-size:11px; color:var(--text2); margin-bottom:8px; }
+        .finish-btns { display:flex; gap:6px; }
+        .finish-btn { flex:1; padding:8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text2); font-size:11px; cursor:pointer; }
+        .finish-btn:hover { border-color:#d4af37; color:#d4af37; }
+        .finish-btn.active[data-finish="gold"] { background:#d4af37; color:#000; border-color:#d4af37; }
+        .finish-btn.active[data-finish="silver"] { background:#c0c0c0; color:#000; border-color:#c0c0c0; }
         .color-presets { display:flex; gap:8px; flex-wrap:wrap; }
         .color-preset { width:40px; height:40px; border-radius:8px; border:2px solid transparent; cursor:pointer; }
         .color-preset:hover { transform:scale(1.1); }
@@ -192,6 +199,13 @@
                 <div class="copper-toggle">
                     <button class="copper-btn" id="btnCopperOnly">&#128310; Solo Rame</button>
                 </div>
+                <div class="finish-toggle">
+                    <div class="finish-label">Finitura</div>
+                    <div class="finish-btns">
+                        <button class="finish-btn active" id="btnFinishGold" data-finish="gold">&#127793; Oro</button>
+                        <button class="finish-btn" id="btnFinishSilver" data-finish="silver">&#11093; Argento</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -307,7 +321,7 @@ class GerberViewer {
         this.currentView = 'top';
 
         // Surface finish colors (applied to exposed pads)
-        this.surfaceFinish = 'none'; // none, gold, silver
+        this.surfaceFinish = 'gold'; // none, gold, silver
         this.surfaceFinishVisible = true; // visibility toggle from layer panel
         this.finishColors = {
             gold: '#d4af37',   // Gold ENIG
@@ -390,6 +404,18 @@ class GerberViewer {
             document.getElementById('btnCopperOnly').classList.toggle('active', this.copperOnly);
             this.render();
         };
+
+        // Finish quick selection buttons
+        document.querySelectorAll('.finish-btn[data-finish]').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.finish-btn[data-finish]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.surfaceFinish = btn.dataset.finish;
+                this.surfaceFinishVisible = true;
+                this.updateLayerList();
+                this.render();
+            };
+        });
 
         document.querySelectorAll('.view-btn[data-view]').forEach(btn => {
             btn.onclick = () => {
@@ -2104,6 +2130,10 @@ class GerberViewer {
 
     setFinishType(type) {
         this.surfaceFinish = type;
+        // Update quick selection buttons
+        document.querySelectorAll('.finish-btn[data-finish]').forEach(b => {
+            b.classList.toggle('active', b.dataset.finish === type);
+        });
         this.updateLayerList();
         this.render();
     }
